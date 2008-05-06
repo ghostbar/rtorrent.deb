@@ -1,0 +1,12 @@
+diff -ur ./rtorrent-0.7.9.orig/src/rpc/scgi_task.cc ./rtorrent-0.7.9/src/rpc/scgi_task.cc
+--- ./rtorrent-0.7.9.orig/src/rpc/scgi_task.cc	2007-08-27 15:24:13.000000000 +0200
++++ ./rtorrent-0.7.9/src/rpc/scgi_task.cc	2008-05-06 21:48:19.000000000 +0200
+@@ -150,7 +150,7 @@
+       m_body = m_buffer;
+ 
+     } else {
+-      char* tmp = new char[(m_bufferSize = contentSize)];
++      char* tmp = new char[(m_bufferSize = contentSize) + 1];
+       std::memcpy(tmp, m_body, std::distance(m_body, m_position));
+       delete [] m_buffer;
+ 
