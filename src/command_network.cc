@@ -38,13 +38,16 @@
 
 #include <functional>
 #include <rak/address_info.h>
-#include <rak/file_stat.h>
 #include <rak/path.h>
 #include <torrent/connection_manager.h>
+#include <torrent/dht_manager.h>
+#include <torrent/throttle.h>
 #include <torrent/tracker.h>
 #include <torrent/tracker_list.h>
 #include <torrent/torrent.h>
+#include <torrent/rate.h>
 
+#include "core/dht_manager.h"
 #include "core/download.h"
 #include "core/manager.h"
 #include "rpc/scgi.h"
@@ -64,7 +67,7 @@ apply_encryption(const torrent::Object& rawArgs) {
 
   uint32_t options_mask = torrent::ConnectionManager::encryption_none;
 
-  for (torrent::Object::list_type::const_iterator itr = args.begin(), last = args.end(); itr != last; itr++) {
+  for (torrent::Object::list_const_iterator itr = args.begin(), last = args.end(); itr != last; itr++) {
     const std::string& opt = itr->as_string();
 
     if (opt == "none")
@@ -119,16 +122,46 @@ void apply_hash_read_ahead(int arg)              { torrent::set_hash_read_ahead(
 void apply_hash_interval(int arg)                { torrent::set_hash_interval(arg * 1000); }
 void apply_encoding_list(const std::string& arg) { torrent::encoding_list()->push_back(arg); }
 
+struct call_add_node_t {
+  call_add_node_t(int port) : m_port(port) { }
+
+  void operator() (const sockaddr* sa, int err) {
+    if (sa == NULL)
+      control->core()->push_log("Could not resolve host.");
+    else
+      torrent::dht_manager()->add_node(sa, m_port);
+  }
+
+  int m_port;
+};
+
+void
+apply_dht_add_node(const std::string& arg) {
+  if (!torrent::dht_manager()->is_valid())
+    throw torrent::input_error("DHT not enabled.");
+
+  int port, ret;
+  char dummy;
+  char host[1024];
+
+  ret = std::sscanf(arg.c_str(), "%1023[^:]:%i%c", host, &port, &dummy);
+
+  if (ret == 1)
+    port = 6881;
+  else if (ret != 2)
+    throw torrent::input_error("Could not parse host.");
+
+  if (port < 1 || port > 65535)
+    throw torrent::input_error("Invalid port number.");
+
+  torrent::connection_manager()->resolver()(host, (int)rak::socket_address::pf_inet, SOCK_DGRAM, call_add_node_t(port));
+}
+
 void
 apply_enable_trackers(int64_t arg) {
   for (core::Manager::DListItr itr = control->core()->download_list()->begin(), last = control->core()->download_list()->end(); itr != last; ++itr) {
-    torrent::TrackerList tl = (*itr)->download()->tracker_list();
-
-    for (int i = 0, last = tl.size(); i < last; ++i)
-      if (arg)
-        tl.get(i).enable();
-      else
-        tl.get(i).disable();
+    std::for_each((*itr)->tracker_list()->begin(), (*itr)->tracker_list()->end(),
+                  arg ? std::mem_fun(&torrent::Tracker::enable) : std::mem_fun(&torrent::Tracker::disable));
 
     if (arg && !rpc::call_command_value("get_use_udp_trackers"))
       (*itr)->enable_udp_trackers(false);
@@ -149,11 +182,7 @@ xmlrpc_find_tracker(core::Download* download, uint32_t index) {
   if (index >= download->tracker_list()->size())
     return NULL;
 
-  // HACK ALERT!!!!
-  static torrent::Tracker hack;
-  hack = download->tracker_list()->get(index);
-
-  return &hack;
+  return download->tracker_list()->at(index);
 }
 
 void
@@ -289,8 +318,13 @@ initialize_command_network() {
 //   ADD_COMMAND_VALUE_TRI("max_uploads_global",   rak::make_mem_fun(control->ui(), &ui::Root::set_max_uploads_global), rak::make_mem_fun(control->ui(), &ui::Root::max_uploads_global));
 //   ADD_COMMAND_VALUE_TRI("max_downloads_global", rak::make_mem_fun(control->ui(), &ui::Root::set_max_downloads_global), rak::make_mem_fun(control->ui(), &ui::Root::max_downloads_global));
 
-  ADD_COMMAND_VALUE_TRI_KB("download_rate",     rak::make_mem_fun(control->ui(), &ui::Root::set_down_throttle_i64), rak::ptr_fun(&torrent::down_throttle));
-  ADD_COMMAND_VALUE_TRI_KB("upload_rate",       rak::make_mem_fun(control->ui(), &ui::Root::set_up_throttle_i64), rak::ptr_fun(&torrent::up_throttle));
+  ADD_COMMAND_VALUE_TRI_KB("download_rate",     rak::make_mem_fun(control->ui(), &ui::Root::set_down_throttle_i64), rak::make_mem_fun(torrent::down_throttle_global(), &torrent::Throttle::max_rate));
+  ADD_COMMAND_VALUE_TRI_KB("upload_rate",       rak::make_mem_fun(control->ui(), &ui::Root::set_up_throttle_i64), rak::make_mem_fun(torrent::up_throttle_global(), &torrent::Throttle::max_rate));
+
+  ADD_COMMAND_VOID("get_up_rate",               rak::make_mem_fun(torrent::up_rate(), &torrent::Rate::rate));
+  ADD_COMMAND_VOID("get_up_total",              rak::make_mem_fun(torrent::up_rate(), &torrent::Rate::total));
+  ADD_COMMAND_VOID("get_down_rate",             rak::make_mem_fun(torrent::down_rate(), &torrent::Rate::rate));
+  ADD_COMMAND_VOID("get_down_total",            rak::make_mem_fun(torrent::down_rate(), &torrent::Rate::total));
 
   ADD_VARIABLE_VALUE("tracker_numwant", -1);
 
@@ -315,8 +349,9 @@ initialize_command_network() {
 
   ADD_COMMAND_STRING_UN("scgi_port",            rak::bind2nd(std::ptr_fun(&apply_scgi), 1));
   ADD_COMMAND_STRING_UN("scgi_local",           rak::bind2nd(std::ptr_fun(&apply_scgi), 2));
-  ADD_VARIABLE_BOOL("scgi_dont_route", false);
+  ADD_VARIABLE_BOOL    ("scgi_dont_route", false);
   ADD_COMMAND_STRING_UN("xmlrpc_dialect",       std::ptr_fun(&apply_xmlrpc_dialect));
+  ADD_COMMAND_VALUE_TRI("xmlrpc_size_limit",    std::ptr_fun(&rpc::XmlRpc::set_size_limit), rak::ptr_fun(&rpc::XmlRpc::size_limit));
 
   ADD_COMMAND_VALUE_TRI("hash_read_ahead",      std::ptr_fun(&apply_hash_read_ahead), rak::ptr_fun(torrent::hash_read_ahead));
   ADD_COMMAND_VALUE_TRI("hash_interval",        std::ptr_fun(&apply_hash_interval), rak::ptr_fun(torrent::hash_interval));
@@ -324,7 +359,12 @@ initialize_command_network() {
   ADD_COMMAND_VALUE_UN("enable_trackers",       std::ptr_fun(&apply_enable_trackers));
   ADD_COMMAND_STRING_UN("encoding_list",        std::ptr_fun(&apply_encoding_list));
 
-  ADD_VARIABLE_BOOL("peer_exchange", false);
+  ADD_VARIABLE_VALUE("dht_port", 6881);
+  ADD_COMMAND_STRING_UN("dht",                  rak::make_mem_fun(control->dht_manager(), &core::DhtManager::set_start));
+  ADD_COMMAND_STRING_UN("dht_add_node",         std::ptr_fun(&apply_dht_add_node));
+  ADD_COMMAND_VOID("dht_statistics",            rak::make_mem_fun(control->dht_manager(), &core::DhtManager::dht_statistics));
+
+  ADD_VARIABLE_BOOL("peer_exchange", true);
 
   // Not really network stuff:
   ADD_VARIABLE_BOOL("handshake_log", false);

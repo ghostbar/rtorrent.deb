@@ -40,6 +40,7 @@
 #include <torrent/exceptions.h>
 #include <torrent/rate.h>
 #include <torrent/hash_string.h>
+#include <torrent/peer/connection_list.h>
 #include <torrent/peer/peer_info.h>
 
 #include "display/frame.h"
@@ -61,10 +62,11 @@ ElementPeerList::ElementPeerList(core::Download* d) :
 
   m_listItr = m_list.end();
 
-  m_download->download()->peer_list(m_list);
+  std::for_each(m_download->download()->connection_list()->begin(), m_download->download()->connection_list()->end(),
+                rak::bind1st(std::mem_fun<void,PList,PList::const_reference>(&PList::push_back), &m_list));
 
-  m_connPeerConnected    = m_download->download()->signal_peer_connected(sigc::mem_fun(*this, &ElementPeerList::receive_peer_connected));
-  m_connPeerDisconnected = m_download->download()->signal_peer_disconnected(sigc::mem_fun(*this, &ElementPeerList::receive_peer_disconnected));
+  m_connPeerConnected    = m_download->download()->connection_list()->signal_connected().connect(sigc::mem_fun(*this, &ElementPeerList::receive_peer_connected));
+  m_connPeerDisconnected = m_download->download()->connection_list()->signal_disconnected().connect(sigc::mem_fun(*this, &ElementPeerList::receive_peer_disconnected));
 
   m_windowList  = new display::WindowPeerList(m_download, &m_list, &m_listItr);
   m_elementInfo = create_info();
@@ -209,16 +211,16 @@ ElementPeerList::receive_disconnect_peer() {
   if (m_listItr == m_list.end())
     return;
 
-  m_download->download()->disconnect_peer(*m_listItr);
+  m_download->connection_list()->erase(*m_listItr, 0);
 }
 
 void
-ElementPeerList::receive_peer_connected(torrent::Peer p) {
+ElementPeerList::receive_peer_connected(torrent::Peer* p) {
   m_list.push_back(p);
 }
 
 void
-ElementPeerList::receive_peer_disconnected(torrent::Peer p) {
+ElementPeerList::receive_peer_disconnected(torrent::Peer* p) {
   PList::iterator itr = std::find(m_list.begin(), m_list.end(), p);
 
   if (itr == m_list.end())
@@ -237,7 +239,7 @@ ElementPeerList::receive_snub_peer() {
   if (m_listItr == m_list.end())
     return;
 
-  m_listItr->set_snubbed(!m_listItr->is_snubbed());
+  (*m_listItr)->set_snubbed(!(*m_listItr)->is_snubbed());
 
   update_itr();
 }
@@ -245,7 +247,7 @@ ElementPeerList::receive_snub_peer() {
 void
 ElementPeerList::update_itr() {
   m_windowList->mark_dirty();
-  m_elementInfo->set_target(m_listItr != m_list.end() ? rpc::make_target(&*m_listItr) : rpc::make_target());
+  m_elementInfo->set_target(m_listItr != m_list.end() ? rpc::make_target(*m_listItr) : rpc::make_target());
 }
 
 }

@@ -51,8 +51,190 @@ namespace rpc {
 
 #ifdef HAVE_XMLRPC_C
 
+class xmlrpc_error : public torrent::base_error {
+public:
+  xmlrpc_error(xmlrpc_env* env) : m_type(env->fault_code), m_msg(env->fault_string) {}
+  xmlrpc_error(int type, char* msg) : m_type(type), m_msg(msg) {}
+  virtual ~xmlrpc_error() throw() {}
+
+  virtual int         type() const throw() { return m_type; }
+  virtual const char* what() const throw() { return m_msg; }
+
+private:
+  int                 m_type;
+  char*               m_msg;
+};
+
+torrent::Object xmlrpc_to_object(xmlrpc_env* env, xmlrpc_value* value, int callType = 0, rpc::target_type* target = NULL);
+
+inline torrent::Object
+xmlrpc_list_entry_to_object(xmlrpc_env* env, xmlrpc_value* src, int index) {
+  xmlrpc_value* tmp;
+  xmlrpc_array_read_item(env, src, index, &tmp);
+
+  if (env->fault_occurred)
+    throw xmlrpc_error(env);
+
+  torrent::Object obj = xmlrpc_to_object(env, tmp);
+  xmlrpc_DECREF(tmp);
+
+  return obj;
+}
+
+int64_t
+xmlrpc_list_entry_to_value(xmlrpc_env* env, xmlrpc_value* src, int index) {
+  xmlrpc_value* tmp;
+  xmlrpc_array_read_item(env, src, index, &tmp);
+
+  if (env->fault_occurred)
+    throw xmlrpc_error(env);
+
+  switch (xmlrpc_value_type(tmp)) {
+  case XMLRPC_TYPE_INT:
+    int v;
+    xmlrpc_read_int(env, tmp, &v);
+    xmlrpc_DECREF(tmp);
+    return v;
+
+#ifdef XMLRPC_HAVE_I8
+  case XMLRPC_TYPE_I8:
+    long long v2;
+    xmlrpc_read_i8(env, tmp, &v2);
+    xmlrpc_DECREF(tmp);
+    return v2;
+#endif
+
+  case XMLRPC_TYPE_STRING:
+  {
+    const char* str;
+    xmlrpc_read_string(env, tmp, &str);
+
+    if (env->fault_occurred)
+      throw xmlrpc_error(env);
+
+    const char* end = str;
+    int64_t v3 = ::strtoll(str, (char**)&end, 0);
+
+    ::free((void*)str);
+
+    if (*str == '\0' || *end != '\0')
+      throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Invalid index.");
+
+    return v3;
+  }
+
+  default:
+    xmlrpc_DECREF(tmp);
+    throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Invalid type found.");
+  }
+}
+
+// Consider making a helper function that creates a target_type from a
+// torrent::Object, then we can just use xmlrpc_to_object.
+rpc::target_type
+xmlrpc_to_target(xmlrpc_env* env, xmlrpc_value* value) {
+  rpc::target_type target;
+
+  switch (xmlrpc_value_type(value)) {
+  case XMLRPC_TYPE_STRING:
+  {
+    const char* str;
+    xmlrpc_read_string(env, value, &str);
+
+    if (env->fault_occurred)
+      throw xmlrpc_error(env);
+
+    if (std::strlen(str) == 0) {
+      // When specifying void, we require a zero-length string.
+      ::free((void*)str);
+      return rpc::make_target();
+
+    } else if (std::strlen(str) < 40) {
+      ::free((void*)str);
+      throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Unsupported target type found.");
+    }
+
+    core::Download* download = xmlrpc.get_slot_find_download()(str);
+
+    if (download == NULL) {
+      ::free((void*)str);
+      throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Could not find info-hash.");
+    }
+
+    if (std::strlen(str) == 40) {
+      ::free((void*)str);
+      return rpc::make_target(download);
+    }
+
+    if (std::strlen(str) < 42 || str[40] != ':') {
+      ::free((void*)str);
+      throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Unsupported target type found.");
+    }
+
+    // Files:    "<hash>:f<index>"
+    // Trackers: "<hash>:t<index>"
+
+    int index;
+    const char* end;
+
+    switch (str[41]) {
+    case 'f':
+      end = str + 42;
+      index = ::strtol(str + 42, (char**)&end, 0);
+
+      if (*str == '\0' || *end != '\0')
+        throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Invalid index.");
+
+      target = rpc::make_target(XmlRpc::call_file, xmlrpc.get_slot_find_file()(download, index));
+      break;
+
+    case 't':
+      end = str + 42;
+      index = ::strtol(str + 42, (char**)&end, 0);
+
+      if (*str == '\0' || *end != '\0')
+        throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Invalid index.");
+
+      target = rpc::make_target(XmlRpc::call_tracker, xmlrpc.get_slot_find_tracker()(download, index));
+      break;
+
+    default:
+      ::free((void*)str);
+      throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Unsupported target type found.");
+    }
+
+    ::free((void*)str);
+
+    // Check if the target pointer is NULL.
+    if (target.second == NULL)
+      throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Invalid index.");
+
+    return target;
+  }
+
+  default:
+    return rpc::make_target();
+  }
+}
+
+rpc::target_type
+xmlrpc_to_index_type(int index, int callType, core::Download* download) {
+  void* result;
+
+  switch (callType) {
+  case XmlRpc::call_file:    result = xmlrpc.get_slot_find_file()(download, index); break;
+  case XmlRpc::call_tracker: result = xmlrpc.get_slot_find_tracker()(download, index); break;
+  default: result = NULL; break;
+  }
+
+  if (result == NULL)
+    throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Invalid index.");
+      
+  return rpc::make_target(callType, result);
+}
+
 torrent::Object
-xmlrpc_to_object(xmlrpc_env* env, xmlrpc_value* value) {
+xmlrpc_to_object(xmlrpc_env* env, xmlrpc_value* value, int callType, rpc::target_type* target) {
   switch (xmlrpc_value_type(value)) {
   case XMLRPC_TYPE_INT:
     int v;
@@ -73,19 +255,28 @@ xmlrpc_to_object(xmlrpc_env* env, xmlrpc_value* value) {
     //     case XMLRPC_TYPE_DATETIME:
 
   case XMLRPC_TYPE_STRING:
-  {
-    const char* valueString;
-    xmlrpc_read_string(env, value, &valueString);
 
-    if (env->fault_occurred)
+    if (callType != XmlRpc::call_generic) {
+      // When the call type is not supposed to be void, we'll try to
+      // convert it to a command target. It's not that important that
+      // it is converted to the right type here, as an mismatch will
+      // be caught when executing the command.
+      *target = xmlrpc_to_target(env, value);
       return torrent::Object();
 
-    torrent::Object result = torrent::Object(std::string(valueString));
+    } else {
+      const char* valueString;
+      xmlrpc_read_string(env, value, &valueString);
 
-    // Urgh, seriously?
-    ::free((void*)valueString);
-    return result;
-  }
+      if (env->fault_occurred)
+        throw xmlrpc_error(env);
+
+      torrent::Object result = torrent::Object(std::string(valueString));
+
+      // Urgh, seriously?
+      ::free((void*)valueString);
+      return result;
+    }
 
   case XMLRPC_TYPE_BASE64:
   {
@@ -95,7 +286,7 @@ xmlrpc_to_object(xmlrpc_env* env, xmlrpc_value* value) {
     xmlrpc_read_base64(env, value, &valueSize, (const unsigned char**)&valueString);
 
     if (env->fault_occurred)
-      return torrent::Object();
+      throw xmlrpc_error(env);
 
     torrent::Object result = torrent::Object(std::string(valueString, valueSize));
 
@@ -106,28 +297,56 @@ xmlrpc_to_object(xmlrpc_env* env, xmlrpc_value* value) {
 
   case XMLRPC_TYPE_ARRAY:
   {
-    torrent::Object result(torrent::Object::TYPE_LIST);
-    torrent::Object::list_type& listRef = result.as_list();
-
+    unsigned int current = 0;
     unsigned int last = xmlrpc_array_size(env, value);
 
     if (env->fault_occurred)
-      return torrent::Object();
+      throw xmlrpc_error(env);
 
-    // Move this into a helper function.
-    for (unsigned int i = 0; i != last; i++) {
-      // Need to decref.
+    if (callType != XmlRpc::call_generic) {
+      if (last < 1)
+        throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Too few arguments.");
+
       xmlrpc_value* tmp;
-      xmlrpc_array_read_item(env, value, i, &tmp);
+      xmlrpc_array_read_item(env, value, current++, &tmp);
 
       if (env->fault_occurred)
-        return torrent::Object();
+        throw xmlrpc_error(env);
 
-      listRef.push_back(xmlrpc_to_object(env, tmp));
+      *target = xmlrpc_to_target(env, tmp);
       xmlrpc_DECREF(tmp);
+
+      if (env->fault_occurred)
+        throw xmlrpc_error(env);
+
+      if (target->first == XmlRpc::call_download &&
+          (callType == XmlRpc::call_file || callType == XmlRpc::call_tracker)) {
+        // If we have a download target and the call type requires
+        // another contained type, then we try to use the next
+        // parameter as the index to support old-style calls.
+
+        if (current == last)
+          throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Too few arguments.");
+
+        *target = xmlrpc_to_index_type(xmlrpc_list_entry_to_value(env, value, current++), callType, (core::Download*)target->second);
+      }
     }
 
-    return result;
+    if (current + 1 < last) {
+      torrent::Object result = torrent::Object::create_list();
+      torrent::Object::list_type& listRef = result.as_list();
+
+      while (current != last)
+        listRef.push_back(xmlrpc_list_entry_to_object(env, value, current++));
+
+      return result;
+
+    } else if (current + 1 == last) {
+      return xmlrpc_list_entry_to_object(env, value, current);
+
+    } else {
+      return torrent::Object();
+    }
   }
 
   //     case XMLRPC_TYPE_STRUCT:
@@ -135,200 +354,8 @@ xmlrpc_to_object(xmlrpc_env* env, xmlrpc_value* value) {
     //     case XMLRPC_TYPE_NIL:
     //     case XMLRPC_TYPE_DEAD:
   default:
-    xmlrpc_env_set_fault(env, XMLRPC_TYPE_ERROR, "Unsupported type found.");
-    return torrent::Object();
+    throw xmlrpc_error(XMLRPC_TYPE_ERROR, "Unsupported type found.");
   }
-}
-
-core::Download*
-xmlrpc_to_download(xmlrpc_env* env, xmlrpc_value* value) {
-  core::Download* download = NULL;
-
-  switch (xmlrpc_value_type(value)) {
-  case XMLRPC_TYPE_STRING:
-  {
-    const char* str;
-    xmlrpc_read_string(env, value, &str);
-
-    if (env->fault_occurred)
-      return NULL;
-
-    if (std::strlen(str) != 40 ||
-        (download = xmlrpc.get_slot_find_download()(str)) == NULL)
-      xmlrpc_env_set_fault(env, XMLRPC_TYPE_ERROR, "Could not find info-hash.");
-
-    // Urgh, seriously?
-    ::free((void*)str);
-    return download;
-  }
-
-  default:
-    xmlrpc_env_set_fault(env, XMLRPC_TYPE_ERROR, "Unsupported type found.");
-    return NULL;
-  }
-}
-
-void*
-xmlrpc_to_index_type(xmlrpc_env* env, xmlrpc_value* value, int callType, core::Download* download) {
-  int index;
-
-  switch (xmlrpc_value_type(value)) {
-  case XMLRPC_TYPE_INT:
-    xmlrpc_read_int(env, value, &index);
-    break;
-
-#ifdef XMLRPC_HAVE_I8
-  case XMLRPC_TYPE_I8:
-    long long v2;
-    xmlrpc_read_i8(env, value, &v2);
-      
-    index = v2;
-    break;
-#endif
-
-  case XMLRPC_TYPE_STRING:
-  {
-    const char* str;
-    xmlrpc_read_string(env, value, &str);
-
-    if (env->fault_occurred)
-      return NULL;
-
-    const char* end = str;
-    index = ::strtol(str, (char**)&end, 0);
-
-    ::free((void*)str);
-
-    if (*str == '\0' || *end != '\0') {
-      xmlrpc_env_set_fault(env, XMLRPC_TYPE_ERROR, "Invalid index.");
-      return NULL;
-    }
-
-    break;
-  }
-
-  default:
-    xmlrpc_env_set_fault(env, XMLRPC_TYPE_ERROR, "Unsupported type found.");
-    return NULL;
-  }
-
-  if (env->fault_occurred)
-    return NULL;
-    
-  void* result;
-
-  switch (callType) {
-  case XmlRpc::call_file:    result = xmlrpc.get_slot_find_file()(download, index); break;
-  case XmlRpc::call_tracker: result = xmlrpc.get_slot_find_tracker()(download, index); break;
-  default: result = NULL; break;
-  }
-
-  if (result == NULL)
-    xmlrpc_env_set_fault(env, XMLRPC_TYPE_ERROR, "Invalid index.");
-      
-  return result;
-}
-
-// This should really be cleaned up and support for an array of
-// downloads should be added.
-torrent::Object
-xmlrpc_to_object_target(xmlrpc_env* env, xmlrpc_value* value, int callType, void** target) {
-  switch (xmlrpc_value_type(value)) {
-  case XMLRPC_TYPE_STRING:
-    if (callType != XmlRpc::call_download) {
-      xmlrpc_env_set_fault(env, XMLRPC_TYPE_ERROR, "Unsupported type found.");
-      break;
-    }
-
-    *target = xmlrpc_to_download(env, value);
-    break;
-
-  case XMLRPC_TYPE_ARRAY:
-  {
-    unsigned int current = 0;
-    unsigned int last = xmlrpc_array_size(env, value);
-
-    if (env->fault_occurred)
-      break;
-
-    if (last < 1) {
-      xmlrpc_env_set_fault(env, XMLRPC_TYPE_ERROR, "Too few arguments.");
-      break;
-    }
-
-    {
-      xmlrpc_value* tmp;
-      xmlrpc_array_read_item(env, value, current++, &tmp);
-
-      if (env->fault_occurred)
-        break;
-
-      *target = xmlrpc_to_download(env, tmp);
-      xmlrpc_DECREF(tmp);
-
-      if (env->fault_occurred)
-        break;
-    }
-
-    if (callType == XmlRpc::call_file || callType == XmlRpc::call_tracker) {
-      if (current == last) {
-        xmlrpc_env_set_fault(env, XMLRPC_TYPE_ERROR, "Too few arguments.");
-        break;
-      }
-
-      xmlrpc_value* tmp;
-      xmlrpc_array_read_item(env, value, current++, &tmp);
-
-      if (env->fault_occurred)
-        break;
-
-      *target = xmlrpc_to_index_type(env, tmp, callType, (core::Download*)*target);
-      xmlrpc_DECREF(tmp);
-
-      if (env->fault_occurred)
-        break;
-    }
-
-    torrent::Object result;
-
-    if (current + 1 < last) {
-      result = torrent::Object(torrent::Object::TYPE_LIST);
-      torrent::Object::list_type& listRef = result.as_list();
-
-      // Move this into a helper function?
-      while (current != last) {
-        xmlrpc_value* tmp;
-        xmlrpc_array_read_item(env, value, current++, &tmp);
-
-        if (env->fault_occurred)
-          break;
-
-        listRef.push_back(xmlrpc_to_object(env, tmp));
-        xmlrpc_DECREF(tmp);
-      }
-
-      return result;
-
-    } else if (current + 1 == last) {
-      // Need to decref.
-      xmlrpc_value* tmp;
-      xmlrpc_array_read_item(env, value, current, &tmp);
-
-      if (env->fault_occurred)
-        break;
-
-      result = xmlrpc_to_object(env, tmp);
-      xmlrpc_DECREF(tmp);
-    }
-
-    return result;
-  }
-
-  default:
-    xmlrpc_env_set_fault(env, XMLRPC_TYPE_ERROR, "Unsupported type found.");
-  }
-
-  return torrent::Object();
 }
 
 xmlrpc_value*
@@ -350,8 +377,11 @@ object_to_xmlrpc(xmlrpc_env* env, const torrent::Object& object) {
   {
     xmlrpc_value* result = xmlrpc_array_new(env);
     
-    for (torrent::Object::list_type::const_iterator itr = object.as_list().begin(), last = object.as_list().end(); itr != last; itr++)
-      xmlrpc_array_append_item(env, result, object_to_xmlrpc(env, *itr));
+    for (torrent::Object::list_const_iterator itr = object.as_list().begin(), last = object.as_list().end(); itr != last; itr++) {
+      xmlrpc_value* item = object_to_xmlrpc(env, *itr);
+      xmlrpc_array_append_item(env, result, item);
+      xmlrpc_DECREF(item);
+    }
 
     return result;
   }
@@ -360,8 +390,11 @@ object_to_xmlrpc(xmlrpc_env* env, const torrent::Object& object) {
   {
     xmlrpc_value* result = xmlrpc_struct_new(env);
     
-    for (torrent::Object::map_type::const_iterator itr = object.as_map().begin(), last = object.as_map().end(); itr != last; itr++)
-      xmlrpc_struct_set_value(env, result, itr->first.c_str(), object_to_xmlrpc(env, itr->second));
+    for (torrent::Object::map_const_iterator itr = object.as_map().begin(), last = object.as_map().end(); itr != last; itr++) {
+      xmlrpc_value* item = object_to_xmlrpc(env, itr->second);
+      xmlrpc_struct_set_value(env, result, itr->first.c_str(), item);
+      xmlrpc_DECREF(item);
+    }
 
     return result;
   }
@@ -380,15 +413,20 @@ xmlrpc_call_command(xmlrpc_env* env, xmlrpc_value* args, void* voidServerInfo) {
     return NULL;
   }
 
-  int   type = itr->second.target();
-  void* target = NULL;
-  torrent::Object object = (type == 0) ? xmlrpc_to_object(env, args) : xmlrpc_to_object_target(env, args, type, &target);
-
-  if (env->fault_occurred)
-    return NULL;
-
   try {
-    return object_to_xmlrpc(env, rpc::commands.call_command(itr, object, rpc::make_target(type, target)));
+    torrent::Object object;
+    rpc::target_type target = rpc::make_target();
+
+    xmlrpc_to_object(env, args, itr->second.target(), &target).swap(object);
+
+    if (env->fault_occurred)
+      return NULL;
+
+    return object_to_xmlrpc(env, rpc::commands.call_command(itr, object, target));
+
+  } catch (xmlrpc_error& e) {
+    xmlrpc_env_set_fault(env, e.type(), e.what());
+    return NULL;
 
   } catch (torrent::local_error& e) {
     xmlrpc_env_set_fault(env, XMLRPC_PARSE_ERROR, e.what());
@@ -483,6 +521,19 @@ XmlRpc::set_dialect(int dialect) {
   m_dialect = dialect;
 }
 
+int64_t
+XmlRpc::size_limit() {
+  return xmlrpc_limit_get(XMLRPC_XML_SIZE_LIMIT_ID);
+}
+
+void
+XmlRpc::set_size_limit(uint64_t size) {
+  if (size >= (64 << 20))
+    throw torrent::input_error("Invalid XMLRPC limit size.");
+
+  xmlrpc_limit_set(XMLRPC_XML_SIZE_LIMIT_ID, size);
+}
+
 #else
 
 void XmlRpc::initialize() { throw torrent::resource_error("XMLRPC not supported."); }
@@ -492,6 +543,9 @@ void XmlRpc::insert_command(__UNUSED const char* name, __UNUSED const char* parm
 void XmlRpc::set_dialect(__UNUSED int dialect) {}
 
 bool XmlRpc::process(__UNUSED const char* inBuffer, __UNUSED uint32_t length, __UNUSED slot_write slotWrite) { return false; }
+
+int64_t XmlRpc::size_limit() { return 0; }
+void    XmlRpc::set_size_limit(uint64_t size) {}
 
 #endif
 

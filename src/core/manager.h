@@ -48,6 +48,10 @@ namespace torrent {
   class Bencode;
 }
 
+namespace utils {
+class FileStatusCache;
+}
+
 namespace core {
 
 class DownloadStore;
@@ -58,6 +62,8 @@ class View;
 class Manager {
 public:
   typedef DownloadList::iterator                    DListItr;
+  typedef utils::FileStatusCache                    FileStatusCache;
+
   typedef sigc::slot1<void, DownloadList::iterator> SlotReady;
   typedef sigc::slot0<void>                         SlotFailed;
 
@@ -66,6 +72,7 @@ public:
 
   DownloadList*       download_list()                     { return m_downloadList; }
   DownloadStore*      download_store()                    { return m_downloadStore; }
+  FileStatusCache*    file_status_cache()                 { return m_fileStatusCache; }
 
   HttpQueue*          http_queue()                        { return m_httpQueue; }
 
@@ -96,6 +103,7 @@ public:
 
   void                push_log(const char* msg);
   void                push_log_std(const std::string& msg) { m_logImportant.push_front(msg); m_logComplete.push_front(msg); }
+  void                push_log_complete(const std::string& msg) { m_logComplete.push_front(msg); }
 
   void                handshake_log(const sockaddr* sa, int msg, int err, const torrent::HashString* hash);
 
@@ -117,11 +125,11 @@ private:
   void                initialize_bencode(Download* d);
 
   void                receive_http_failed(std::string msg);
-
   void                receive_hashing_changed();
 
   DownloadList*       m_downloadList;
   DownloadStore*      m_downloadStore;
+  FileStatusCache*    m_fileStatusCache;
   HttpQueue*          m_httpQueue;
 
   View*               m_hashingView;
@@ -130,6 +138,9 @@ private:
   Log                 m_logImportant;
   Log                 m_logComplete;
 };
+
+// Meh, cleanup.
+extern void receive_tracker_dump(const std::string& url, const char* data, size_t size);
 
 }
 

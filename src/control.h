@@ -51,6 +51,7 @@ namespace core {
   class Manager;
   class ViewManager;
   class Scheduler;
+  class DhtManager;
 }
 
 namespace display {
@@ -80,6 +81,7 @@ public:
 
   void                initialize();
   void                cleanup();
+  void                cleanup_exception();
 
   void                handle_shutdown();
 
@@ -89,6 +91,7 @@ public:
   core::Manager*      core()                        { return m_core; }
   core::ViewManager*  view_manager()                { return m_viewManager; }
   core::Scheduler*    scheduler()                   { return m_scheduler; }
+  core::DhtManager*   dht_manager()                 { return m_dhtManager; }
 
   torrent::Poll*      poll();
 
@@ -118,6 +121,7 @@ private:
   core::Manager*      m_core;
   core::ViewManager*  m_viewManager;
   core::Scheduler*    m_scheduler;
+  core::DhtManager*   m_dhtManager;
 
   ui::Root*           m_ui;
   display::Manager*   m_display;

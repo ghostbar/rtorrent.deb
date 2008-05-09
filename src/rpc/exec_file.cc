@@ -38,6 +38,7 @@
 
 #include <string>
 #include <unistd.h>
+#include <rak/error_number.h>
 #include <rak/path.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -90,8 +91,12 @@ ExecFile::execute(const char* file, char* const* argv) {
 
   } else {
     int status;
+    int wpid = waitpid(childPid, &status, 0);
 
-    if (waitpid(childPid, &status, 0) != childPid)
+    while (wpid == -1 && rak::error_number::current().value() == rak::error_number::e_intr)
+      wpid = waitpid(childPid, &status, 0);
+
+    if (wpid != childPid)
       throw torrent::internal_error("ExecFile::execute(...) waitpid failed.");
 
     // Check return value?
@@ -120,7 +125,7 @@ ExecFile::execute_object(const torrent::Object& rawArgs, int flags) {
   if (args.empty())
     throw torrent::input_error("Too few arguments.");
 
-  for (torrent::Object::list_type::const_iterator itr = args.begin(), last = args.end(); itr != last; itr++, argsCurrent++) {
+  for (torrent::Object::list_const_iterator itr = args.begin(), last = args.end(); itr != last; itr++, argsCurrent++) {
     if (argsCurrent == argsBuffer + max_args - 1)
       throw torrent::input_error("Too many arguments.");
 

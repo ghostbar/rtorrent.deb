@@ -44,6 +44,7 @@
 #include <torrent/exceptions.h>
 #include <torrent/connection_manager.h>
 #include <torrent/rate.h>
+#include <torrent/throttle.h>
 #include <torrent/torrent.h>
 #include <torrent/tracker.h>
 #include <torrent/tracker_list.h>
@@ -188,11 +189,13 @@ print_download_status(char* first, char* last, core::Download* d) {
     first = print_buffer(first, last, "Checking hash [%2i%%]",
                          (d->download()->chunks_hashed() * 100) / d->download()->file_list()->size_chunks());
 
-  } else if (d->tracker_list()->is_busy() && d->tracker_list()->focus() < d->tracker_list()->size()) {
+  } else if (d->tracker_list()->has_active() && d->tracker_list()->focus() < d->tracker_list()->end()) {
     torrent::TrackerList* tl = d->tracker_list();
+    char status[128];
 
-    first = print_buffer(first, last, "Tracker[%i:%i]: Connecting to %s",
-                         tl->get(tl->focus()).group(), tl->focus(), tl->get(tl->focus()).url().c_str());
+    (*tl->focus())->get_status(status, sizeof(status));
+    first = print_buffer(first, last, "Tracker[%i:%i]: Connecting to %s %s",
+                         (*tl->focus())->group(), tl->focus_index(), (*tl->focus())->url().c_str(), status);
 
   } else if (!d->message().empty()) {
     first = print_buffer(first, last, "%s", d->message().c_str());
@@ -248,15 +251,15 @@ print_client_version(char* first, char* last, const torrent::ClientInfo& clientI
 
 char*
 print_status_info(char* first, char* last) {
-  if (torrent::up_throttle() == 0)
+  if (torrent::up_throttle_global()->max_rate() == 0)
     first = print_buffer(first, last, "[Throttle off");
   else
-    first = print_buffer(first, last, "[Throttle %3i", torrent::up_throttle() / 1024);
+    first = print_buffer(first, last, "[Throttle %3i", torrent::up_throttle_global()->max_rate() / 1024);
 
-  if (torrent::down_throttle() == 0)
+  if (torrent::down_throttle_global()->max_rate() == 0)
     first = print_buffer(first, last, "/off KB]");
   else
-    first = print_buffer(first, last, "/%3i KB]", torrent::down_throttle() / 1024);
+    first = print_buffer(first, last, "/%3i KB]", torrent::down_throttle_global()->max_rate() / 1024);
   
   first = print_buffer(first, last, " [Rate %5.1f/%5.1f KB]",
                        (double)torrent::up_rate()->rate() / 1024.0,

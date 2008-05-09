@@ -150,6 +150,15 @@ Close a torrent and its files.
 	</varlistentry>
 
 	<varlistentry>
+	  <term>^E</term>
+	  <listitem><para>
+Set the 'create/resize queued' flags on all files in a torrent. This
+is necessary if the underlying files in a torrent have been deleted or
+truncated, and thus rtorrent must recreate them.
+          </para></listitem>
+	</varlistentry>
+
+	<varlistentry>
 	  <term>^R</term>
 	  <listitem><para>
 Initiate hash check of torrent.
@@ -168,6 +177,14 @@ closed.
 	  <term>^X</term>
 	  <listitem><para>
 Call commands or change settings.
+          </para></listitem>
+	</varlistentry>
+
+	<varlistentry>
+	  <term>^B</term>
+	  <listitem><para>
+Set download to perform initial seeding. Only use when
+you are the first and only seeder so far for the download.
           </para></listitem>
 	</varlistentry>
 
@@ -706,6 +723,38 @@ not allow connections to UDP trackers.
         </para></listitem>
       </varlistentry>
 
+       <varlistentry>
+        <term>dht = <replaceable>disabled|off|auto|on</replaceable></term>
+        <listitem><para>
+Support for querying the distributed hash table (DHT) to find peers for trackerless
+torrents or when all trackers are down. Set to <emphasis>disable</emphasis> to completely
+disable DHT, <emphasis>off</emphasis> (default) to enable DHT but to not start the
+DHT server, <emphasis>auto</emphasis> to automatically start and stop the DHT server
+as needed or <emphasis>on</emphasis> for permanently keeping the DHT server running.
+When set to automatic, the DHT server will start up when the first non-private torrent
+is started, and will stop 15-30 minutes after the last non-private torrent is
+stopped (or when rTorrent quits). For DHT to work, a session directory must be set (for
+saving the DHT cache).
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term>dht_port = <replaceable>number</replaceable></term>
+        <listitem><para>
+Set the UDP listen port for DHT. Defaults to 6881.
+        </para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term>dht_add_node = <replaceable>host[:port]</replaceable></term>
+        <listitem><para>
+Not intended for use in the configuration file but as one-time option in the
+client or on the command line to bootstrap an empty DHT node table. Contacts 
+the given node and attempts to bootstrap from it if it replies.
+The port is optional, with port 6881 being used by default.
+        </para></listitem>
+      </varlistentry>
+
       <varlistentry>
         <term>http_capath = <replaceable>path</replaceable></term>
         <term>http_cacert = <replaceable>filename</replaceable></term>
@@ -767,21 +816,23 @@ number of criteria, including zero, from the following:
         </para></listitem>
       </varlistentry>
 
-      <varlistentry>
-        <term>view_filter = <replaceable>name</replaceable>,<replaceable>...</replaceable></term>
-        <listitem><para>
+<!--       <varlistentry> -->
+<!--         <term>view_filter = <replaceable>command</replaceable></term> -->
+<!--         <listitem><para> -->
 
-Set a list of filter to apply when new new downloads are added and
-when <emphasis>view_sort</emphasis> is called. All filters must
-match for the download to be included.
+<!-- Set a list of filter to apply when new new downloads are added and -->
+<!-- when <emphasis>view_sort</emphasis> is called. All filters must -->
+<!-- match for the download to be included. -->
 
-        </para><para>
 
-<emphasis>stopped</emphasis>, <emphasis>started</emphasis>,
-<emphasis>complete</emphasis>, <emphasis>incomplete</emphasis>,
 
-        </para></listitem>
-      </varlistentry>
+<!--         </para><para> -->
+
+<!-- <emphasis>stopped</emphasis>, <emphasis>started</emphasis>, -->
+<!-- <emphasis>complete</emphasis>, <emphasis>incomplete</emphasis>, -->
+
+<!--         </para></listitem> -->
+<!--       </varlistentry> -->
 
       <varlistentry>
         <term>key_layout = <replaceable>qwerty|azerty|qwertz|dvorak</replaceable></term>
@@ -979,7 +1030,7 @@ Adjust the send and receive buffer size for socket.
       </varlistentry>
 
       <varlistentry>
-        <term>umask = <replaceable>0644</replaceable></term>
+        <term>umask = <replaceable>0022</replaceable></term>
         <listitem><para>
 
 Set the umask for this process, which is applied to all files created

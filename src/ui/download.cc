@@ -45,6 +45,7 @@
 #include <torrent/torrent.h>
 #include <torrent/tracker_list.h>
 #include <torrent/data/file_list.h>
+#include <torrent/peer/connection_list.h>
 
 #include "core/download.h"
 #include "input/manager.h"
@@ -152,7 +153,8 @@ Download::create_info() {
   element->push_column("Created:",          te_command("cat=$to_date=$d.get_creation_date=,\" \",$to_time=$d.get_creation_date="));
 
   element->push_back("");
-  element->push_column("Directory:",        te_command("d.get_base_path="));
+  element->push_column("Directory:",        te_command("d.get_directory="));
+  element->push_column("Base Path:",        te_command("d.get_base_path="));
   element->push_column("Tied to file:",     te_command("d.get_tied_to_file="));
   element->push_column("File stats:",       te_command("cat=$if=$d.is_multi_file=\\,multi\\,single,\" \",$d.get_size_files=,\" files\""));
 
@@ -174,8 +176,8 @@ Download::create_info() {
   element->push_back("");
   element->push_column("Connection type:",  te_command("d.get_connection_current="));
   element->push_column("Safe sync:",        te_command("if=$get_safe_sync=,yes,no"));
-  element->push_column("Send buffer:",      te_command("cat=$to_mb=$get_send_buffer_size=,\" KB\""));
-  element->push_column("Receive buffer:",   te_command("cat=$to_mb=$get_receive_buffer_size=,\" KB\""));
+  element->push_column("Send buffer:",      te_command("cat=$to_kb=$get_send_buffer_size=,\" KB\""));
+  element->push_column("Receive buffer:",   te_command("cat=$to_kb=$get_receive_buffer_size=,\" KB\""));
 
   element->push_back("");
   element->push_column("Upload:",           te_command("cat=$to_kb=$d.get_up_rate=,\" KB / \",$to_xb=$d.get_up_total="));
@@ -293,14 +295,14 @@ void
 Download::receive_min_peers(int t) {
   m_windowDownloadStatus->mark_dirty();
 
-  m_download->download()->set_peers_min(std::max(m_download->download()->peers_min() + t, (uint32_t)5));
+  m_download->download()->connection_list()->set_min_size(std::max(m_download->download()->connection_list()->min_size() + t, (uint32_t)5));
 }
 
 void
 Download::receive_max_peers(int t) {
   m_windowDownloadStatus->mark_dirty();
 
-  m_download->download()->set_peers_max(std::max(m_download->download()->peers_max() + t, (uint32_t)5));
+  m_download->download()->connection_list()->set_max_size(std::max(m_download->download()->connection_list()->max_size() + t, (uint32_t)5));
 }
 
 void

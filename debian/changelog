@@ -1,3 +1,14 @@
+rtorrent (0.8.2-1) experimental; urgency=low
+
+  * New upstream release.
+  * debian/patches/02_offbyone-xmlrpc_479807.patch:
+   + Fixed already upstream.
+  * debian/patches/01_rtorrent-gcc43.patch:
+   + This is fact does work perfectly, deleted old version for fixing build
+   with gcc4.3, replaced by this one.
+
+ -- Jose Luis Rivas <ghostbar38@gmail.com>  Thu, 08 May 2008 23:03:55 -0430
+
 rtorrent (0.7.9-2) unstable; urgency=low
 
   * debian/patches/01_missing-libraries_474852.patch:

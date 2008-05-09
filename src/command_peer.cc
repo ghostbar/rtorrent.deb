@@ -68,25 +68,25 @@ retrieve_p_id_html(torrent::Peer* peer) {
 
 torrent::Object
 retrieve_p_address(torrent::Peer* peer) {
-  return rak::socket_address::cast_from(peer->info()->socket_address())->address_str();
+  return rak::socket_address::cast_from(peer->peer_info()->socket_address())->address_str();
 }
 
 torrent::Object
 retrieve_p_port(torrent::Peer* peer) {
-  return rak::socket_address::cast_from(peer->info()->socket_address())->port();
+  return rak::socket_address::cast_from(peer->peer_info()->socket_address())->port();
 }
 
 torrent::Object
 retrieve_p_client_version(torrent::Peer* peer) {
   char buf[128];
-  display::print_client_version(buf, buf + 128, peer->info()->client_info());
+  display::print_client_version(buf, buf + 128, peer->peer_info()->client_info());
 
   return std::string(buf);
 }
 
 torrent::Object
 retrieve_p_options_str(torrent::Peer* peer) {
-  return rak::transform_hex(peer->info()->options(), peer->info()->options() + 8);
+  return rak::transform_hex(peer->peer_info()->options(), peer->peer_info()->options() + 8);
 }
 
 torrent::Object
@@ -96,11 +96,11 @@ retrieve_p_completed_percent(torrent::Peer* peer) {
 
 #define ADD_CP_SLOT(key, function, slot, parm, doc)    \
   commandPeerSlotsItr->set_slot(slot); \
-  rpc::commands.insert_peer(key, commandPeerSlotsItr++, &rpc::CommandSlot<torrent::Peer*>::function, rpc::CommandMap::flag_dont_delete, parm, doc);
+  rpc::commands.insert_type(key, commandPeerSlotsItr++, &rpc::CommandSlot<torrent::Peer*>::function, rpc::CommandMap::flag_dont_delete, parm, doc);
 
 #define ADD_CP_SLOT_PUBLIC(key, function, slot, parm, doc)    \
   commandPeerSlotsItr->set_slot(slot); \
-  rpc::commands.insert_peer(key, commandPeerSlotsItr++, &rpc::CommandSlot<torrent::Peer*>::function, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, parm, doc);
+  rpc::commands.insert_type(key, commandPeerSlotsItr++, &rpc::CommandSlot<torrent::Peer*>::function, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, parm, doc);
 
 #define ADD_CP_VOID(key, slot) \
   ADD_CP_SLOT_PUBLIC("p.get_" key, call_unknown, rpc::object_fn(slot), "i:", "")

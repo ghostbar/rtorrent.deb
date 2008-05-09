@@ -34,74 +34,56 @@
 //           Skomakerveien 33
 //           3185 Skoppum, NORWAY
 
-#include "config.h"
+#ifndef RTORRENT_CORE_DHT_MANAGER_H
+#define RTORRENT_CORE_DHT_MANAGER_H
 
-#include <algorithm>
-#include <rak/functional.h>
-#include <torrent/exceptions.h>
+#include <rak/priority_queue_default.h>
 
-#include "download.h"
-#include "download_list.h"
-#include "scheduler.h"
-#include "view.h"
+#include <torrent/object.h>
 
 namespace core {
 
-// Change to unlimited.
-Scheduler::Scheduler(DownloadList* dl) :
-  m_view(NULL),
-  m_downloadList(dl),
+class DhtManager {
+public:
+  DhtManager() : m_warned(false), m_start(dht_off) { }
+  ~DhtManager();
 
-  m_maxActive(2),
-  m_cycle(1) {
-}
+  void                load_dht_cache();
+  void                save_dht_cache();
+  torrent::Object     dht_statistics();
 
-Scheduler::~Scheduler() {
-}
+  void                start_dht();
+  void                stop_dht();
+  void                auto_start()                 { if (m_start == dht_auto) start_dht(); }
 
-void
-Scheduler::set_view(View* view) {
-  m_view = view;
-}
+  void                set_start(const std::string& arg);
 
-Scheduler::size_type
-Scheduler::active() const {
-  return std::count_if(m_view->begin_visible(), m_view->end_visible(), std::mem_fun(&Download::is_active));
-}
+private:
+  static const int    dht_disable = 0;
+  static const int    dht_off     = 1;
+  static const int    dht_auto    = 2;
+  static const int    dht_on      = 3;
 
-void
-Scheduler::update() {
-//   size_type curActive = active();
-  //  size_type curInactive = m_view->size() - curActive;
+  static const int    dht_settings_num = 4;
+  static const char*  dht_settings[dht_settings_num];
 
-  // Hmm... Perhaps we should use a more complex sorting thingie.
-//   m_view->sort();
+  void                update();
+  bool                log_statistics(bool force);
 
-  // Just a hack for now, need to take into consideration how many
-  // inactive we can switch with.
-//   size_type target = m_maxActive - std::min(m_cycle, m_maxActive);
+  unsigned int        m_dhtPrevCycle;
+  unsigned int        m_dhtPrevQueriesSent;
+  unsigned int        m_dhtPrevRepliesReceived;
+  unsigned int        m_dhtPrevQueriesReceived;
+  uint64_t            m_dhtPrevBytesUp;
+  uint64_t            m_dhtPrevBytesDown;
 
-//   for (View::iterator itr = m_view->begin_visible(), last = m_view->end_visible(); curActive > target; ++itr) {
-//     if (itr == last)
-//       throw torrent::internal_error("Scheduler::update() loop bork.");
+  rak::priority_item  m_updateTimeout;
+  rak::priority_item  m_stopTimeout;
+  bool                m_warned;
 
-//     if ((*itr)->is_active()) {
-//       m_downloadList->pause(*itr);
-//       --curActive;
-//     }      
-//   }
-
-//   m_view->sort();
-
-//   for (View::iterator itr = m_view->begin_visible(), last = m_view->end_visible(); curActive < m_maxActive; ++itr) {
-//     if (itr == last)
-//       throw torrent::internal_error("Scheduler::update() loop bork.");
-
-//     if (!(*itr)->is_active()) {
-//       m_downloadList->start_try(*itr);
-//       ++curActive;
-//     }      
-//   }
-}
+  int                 m_start;
+};
 
 }
+
+#endif

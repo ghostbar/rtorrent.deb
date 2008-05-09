@@ -55,11 +55,11 @@ apply_t_set_enabled(torrent::Tracker* tracker, int64_t state) {
 
 #define ADD_CT_SLOT(key, function, slot, parm, doc)    \
   commandTrackerSlotsItr->set_slot(slot); \
-  rpc::commands.insert_tracker(key, commandTrackerSlotsItr++, &rpc::CommandSlot<torrent::Tracker*>::function, rpc::CommandMap::flag_dont_delete, parm, doc);
+  rpc::commands.insert_type(key, commandTrackerSlotsItr++, &rpc::CommandSlot<torrent::Tracker*>::function, rpc::CommandMap::flag_dont_delete, parm, doc);
 
 #define ADD_CT_SLOT_PUBLIC(key, function, slot, parm, doc)    \
   commandTrackerSlotsItr->set_slot(slot); \
-  rpc::commands.insert_tracker(key, commandTrackerSlotsItr++, &rpc::CommandSlot<torrent::Tracker*>::function, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, parm, doc);
+  rpc::commands.insert_type(key, commandTrackerSlotsItr++, &rpc::CommandSlot<torrent::Tracker*>::function, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, parm, doc);
 
 #define ADD_CT_VOID(key, slot) \
   ADD_CT_SLOT_PUBLIC("t." key, call_unknown,     rpc::object_void_fn<torrent::Tracker*>(slot), "i:", "")
@@ -85,10 +85,10 @@ void
 initialize_command_tracker() {
   ADD_CT_STRING_UNI("url",             std::mem_fun(&torrent::Tracker::url));
   ADD_CT_VOID_UNI("group",             std::mem_fun(&torrent::Tracker::group));
-  ADD_CT_VOID_UNI("type",              std::mem_fun(&torrent::Tracker::tracker_type));
+  ADD_CT_VOID_UNI("type",              std::mem_fun(&torrent::Tracker::type));
   ADD_CT_STRING_UNI("id",              std::mem_fun(&torrent::Tracker::tracker_id));
 
-  ADD_CT_VOID("is_open",               std::mem_fun(&torrent::Tracker::is_open));
+  ADD_CT_VOID("is_open",               std::mem_fun(&torrent::Tracker::is_busy));
   ADD_CT_BOOL("enabled",               std::ptr_fun(&apply_t_set_enabled), std::mem_fun(&torrent::Tracker::is_enabled));
   
   ADD_CT_VOID_UNI("normal_interval",   std::mem_fun(&torrent::Tracker::normal_interval));

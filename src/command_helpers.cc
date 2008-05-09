@@ -69,6 +69,7 @@ void initialize_command_peer();
 void initialize_command_local();
 void initialize_command_network();
 void initialize_command_tracker();
+void initialize_command_scheduler();
 void initialize_command_ui();
 
 void
@@ -81,12 +82,14 @@ initialize_commands() {
   initialize_command_file();
   initialize_command_peer();
   initialize_command_tracker();
+  initialize_command_scheduler();
 
 #ifdef ADDING_COMMANDS 
   if (commandSlotsItr > commandSlots + COMMAND_SLOTS_SIZE ||
       commandVariablesItr > commandVariables + COMMAND_VARIABLES_SIZE ||
       commandDownloadSlotsItr > commandDownloadSlots + COMMAND_DOWNLOAD_SLOTS_SIZE ||
       commandFileSlotsItr > commandFileSlots + COMMAND_FILE_SLOTS_SIZE ||
+      commandFileItrSlotsItr > commandFileItrSlots + COMMAND_FILE_ITR_SLOTS_SIZE ||
       commandPeerSlotsItr > commandPeerSlots + COMMAND_PEER_SLOTS_SIZE ||
       commandTrackerSlotsItr > commandTrackerSlots + COMMAND_TRACKER_SLOTS_SIZE ||
       commandAnySlotsItr > commandAnySlots + COMMAND_ANY_SLOTS_SIZE)
@@ -95,6 +98,7 @@ initialize_commands() {
       commandVariablesItr != commandVariables + COMMAND_VARIABLES_SIZE ||
       commandDownloadSlotsItr != commandDownloadSlots + COMMAND_DOWNLOAD_SLOTS_SIZE ||
       commandFileSlotsItr != commandFileSlots + COMMAND_FILE_SLOTS_SIZE ||
+      commandFileItrSlotsItr != commandFileItrSlots + COMMAND_FILE_ITR_SLOTS_SIZE ||
       commandPeerSlotsItr != commandPeerSlots + COMMAND_PEER_SLOTS_SIZE ||
       commandTrackerSlotsItr != commandTrackerSlots + COMMAND_TRACKER_SLOTS_SIZE ||
       commandAnySlotsItr != commandAnySlots + COMMAND_ANY_SLOTS_SIZE)
@@ -104,16 +108,16 @@ initialize_commands() {
 
 void
 add_variable(const char* getKey, const char* setKey, const char* defaultSetKey,
-             rpc::CommandMap::generic_slot getSlot, rpc::CommandMap::generic_slot setSlot,
+             rpc::Command::generic_slot getSlot, rpc::Command::generic_slot setSlot,
              const torrent::Object& defaultObject) {
   rpc::CommandVariable* variable = commandVariablesItr++;
   variable->set_variable(defaultObject);
 
-  rpc::commands.insert_generic(getKey, variable, getSlot, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, "i:", "");
+  rpc::commands.insert_type(getKey, variable, getSlot, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, "i:", "");
 
   if (setKey)
-    rpc::commands.insert_generic(setKey, variable, setSlot, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, "i:", "");
+    rpc::commands.insert_type(setKey, variable, setSlot, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, "i:", "");
 
   if (defaultSetKey)
-    rpc::commands.insert_generic(defaultSetKey, variable, setSlot, rpc::CommandMap::flag_dont_delete, "i:", "");
+    rpc::commands.insert_type(defaultSetKey, variable, setSlot, rpc::CommandMap::flag_dont_delete, "i:", "");
 }

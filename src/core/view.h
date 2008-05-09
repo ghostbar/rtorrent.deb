@@ -60,16 +60,11 @@
 namespace core {
 
 class Download;
-class DownloadList;
-class ViewSort;
-class ViewFilter;
 
 class View : private std::vector<Download*> {
 public:
   typedef std::vector<Download*>         base_type;
   typedef sigc::signal0<void>            signal_type;
-  typedef std::vector<const ViewSort*>   sort_list;
-  typedef std::vector<const ViewFilter*> filter_list;
 
   using base_type::iterator;
   using base_type::const_iterator;
@@ -81,13 +76,15 @@ public:
   View() {}
   ~View();
 
-  void                initialize(const std::string& name, DownloadList* dlist);
+  void                initialize(const std::string& name);
 
   const std::string&  name() const                            { return m_name; }
 
   bool                empty_visible() const                   { return m_size == 0; }
 
   size_type           size() const                            { return m_size; }
+  size_type           size_visible() const                    { return m_size; }
+  size_type           size_not_visible() const                { return base_type::size() - m_size; }
 
   // Perhaps this should be renamed?
   iterator            begin_visible()                         { return begin(); }
@@ -106,21 +103,31 @@ public:
   const_iterator      focus() const                           { return begin() + m_focus; }
   void                set_focus(iterator itr)                 { m_focus = position(itr); m_signalChanged.emit(); }
 
+  void                insert(Download* download)              { base_type::push_back(download); }
+  void                erase(Download* download);
+
+  void                set_visible(Download* download);
+  void                set_not_visible(Download* download);
+
   void                next_focus();
   void                prev_focus();
 
   void                sort();
 
-  void                set_sort_new(const sort_list& s)        { m_sortNew = s; }
-  void                set_sort_current(const sort_list& s)    { m_sortCurrent = s; }
+  void                set_sort_new(const std::string& s)      { m_sortNew = s; }
+  void                set_sort_current(const std::string& s)  { m_sortCurrent = s; }
 
   // Need to explicity trigger filtering.
   void                filter();
+  void                filter_download(core::Download* download);
 
-  void                set_filter(const filter_list& s)        { m_filter = s; }
+  void                set_filter(const std::string& s)        { m_filter = s; }
   void                set_filter_on(int event);
 
   void                clear_filter_on();
+
+  void                set_event_added(const std::string& cmd)   { m_eventAdded = cmd; }
+  void                set_event_removed(const std::string& cmd) { m_eventRemoved = cmd; }
 
   // The time of the last change to the view, semantics of this is
   // user-dependent. Used by f.ex. ViewManager to decide if it should
@@ -142,9 +149,9 @@ private:
   void                push_back(Download* d)                  { base_type::push_back(d); }
 
   inline void         insert_visible(Download* d);
-  inline void         erase(iterator itr);
+  inline void         erase_internal(iterator itr);
 
-  void                received(Download* d, int event);
+  inline void         emit_changed();
 
   size_type           position(const_iterator itr) const      { return itr - begin(); }
 
@@ -152,32 +159,22 @@ private:
 
   std::string         m_name;
 
-  DownloadList*       m_list;
-
   size_type           m_size;
   size_type           m_focus;
 
-  sort_list           m_sortNew;
-  sort_list           m_sortCurrent;
+  // These should be replaced by a faster non-string command type.
+  std::string         m_sortNew;
+  std::string         m_sortCurrent;
 
-  filter_list         m_filter;
+  std::string         m_filter;
+
+  std::string         m_eventAdded;
+  std::string         m_eventRemoved;
 
   rak::timer          m_lastChanged;
+
   signal_type         m_signalChanged;
-};
-
-class ViewSort {
-public:
-  virtual ~ViewSort() {}
-
-  virtual bool operator () (Download* d1, Download* d2) const = 0;
-};
-
-class ViewFilter {
-public:
-  virtual ~ViewFilter() {}
-
-  virtual bool operator () (Download* d1) const = 0;
+  rak::priority_item  m_delayChanged;
 };
 
 }
