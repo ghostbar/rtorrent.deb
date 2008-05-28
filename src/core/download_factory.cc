@@ -61,6 +61,14 @@
 
 namespace core {
 
+bool
+is_network_uri(const std::string& uri) {
+  return
+    std::strncmp(uri.c_str(), "http://", 7) == 0 ||
+    std::strncmp(uri.c_str(), "https://", 8) == 0 ||
+    std::strncmp(uri.c_str(), "ftp://", 6) == 0;
+}
+
 DownloadFactory::DownloadFactory(Manager* m) :
   m_manager(m),
   m_stream(NULL),
@@ -69,7 +77,8 @@ DownloadFactory::DownloadFactory(Manager* m) :
 
   m_session(false),
   m_start(false),
-  m_printLog(true) {
+  m_printLog(true),
+  m_isFile(false) {
 
   m_taskLoad.set_slot(rak::mem_fn(this, &DownloadFactory::receive_load));
   m_taskCommit.set_slot(rak::mem_fn(this, &DownloadFactory::receive_commit));
@@ -114,9 +123,7 @@ DownloadFactory::receive_load() {
   if (m_stream)
     throw torrent::internal_error("DownloadFactory::load*() called on an object with m_stream != NULL");
 
-  if (std::strncmp(m_uri.c_str(), "http://", 7) == 0 ||
-      std::strncmp(m_uri.c_str(), "https://", 8) == 0 ||
-      std::strncmp(m_uri.c_str(), "ftp://", 6) == 0) {
+  if (is_network_uri(m_uri)) {
     // Http handling here.
     m_stream = new std::stringstream;
     HttpQueue::iterator itr = m_manager->http_queue()->insert(m_uri, m_stream);
@@ -129,11 +136,12 @@ DownloadFactory::receive_load() {
   } else {
     std::fstream* stream = new std::fstream(rak::path_expand(m_uri).c_str(), std::ios::in | std::ios::binary);
     m_stream = stream;
+    m_isFile = true;
 
-    if (stream->is_open())
-      receive_loaded();
-    else
-      receive_failed("Could not open file");
+    if (!stream->is_open())
+      return receive_failed("Could not open file");
+
+    receive_loaded();
   }
 }
 
@@ -177,10 +185,7 @@ DownloadFactory::receive_success() {
     root->erase_key("libtorrent");
   }
 
-  if (!root->has_key_map("rtorrent"))
-    root->insert_key("rtorrent", torrent::Object(torrent::Object::TYPE_MAP));
-    
-  torrent::Object* rtorrent = &root->get_key("rtorrent");
+  torrent::Object* rtorrent = &root->insert_preserve_copy("rtorrent", torrent::Object::create_map()).first->second;
 
   initialize_rtorrent(download, rtorrent);
 
@@ -190,21 +195,17 @@ DownloadFactory::receive_success() {
   if (!rtorrent->has_key_string("custom4")) rtorrent->insert_key("custom4", std::string());
   if (!rtorrent->has_key_string("custom5")) rtorrent->insert_key("custom5", std::string());
 
-  // Move to 'rtorrent'.
-  rpc::call_command("d.set_connection_leech", m_variables["connection_leech"], rpc::make_target(download));
-  rpc::call_command("d.set_connection_seed",  m_variables["connection_seed"], rpc::make_target(download));
-
-  rpc::call_command("d.set_max_uploads",      rpc::call_command_void("get_max_uploads"), rpc::make_target(download));
-  rpc::call_command("d.set_min_peers",        rpc::call_command_void("get_min_peers"), rpc::make_target(download));
-  rpc::call_command("d.set_max_peers",        rpc::call_command_void("get_max_peers"), rpc::make_target(download));
+  rpc::call_command("d.set_uploads_max",      rpc::call_command_void("get_max_uploads"), rpc::make_target(download));
+  rpc::call_command("d.set_peers_min",        rpc::call_command_void("get_min_peers"), rpc::make_target(download));
+  rpc::call_command("d.set_peers_max",        rpc::call_command_void("get_max_peers"), rpc::make_target(download));
   rpc::call_command("d.set_tracker_numwant",  rpc::call_command_void("get_tracker_numwant"), rpc::make_target(download));
 
   if (rpc::call_command_value("d.get_complete", rpc::make_target(download)) != 0) {
     if (rpc::call_command_value("get_min_peers_seed") >= 0)
-      rpc::call_command("d.set_min_peers", rpc::call_command_void("get_min_peers_seed"), rpc::make_target(download));
+      rpc::call_command("d.set_peers_min", rpc::call_command_void("get_min_peers_seed"), rpc::make_target(download));
 
     if (rpc::call_command_value("get_max_peers_seed") >= 0)
-      rpc::call_command("d.set_max_peers", rpc::call_command_void("get_max_peers_seed"), rpc::make_target(download));
+      rpc::call_command("d.set_peers_max", rpc::call_command_void("get_max_peers_seed"), rpc::make_target(download));
   }
 
   if (!rpc::call_command_value("get_use_udp_trackers"))
@@ -225,17 +226,14 @@ DownloadFactory::receive_success() {
   if (!rtorrent->has_key_string("directory"))
     rpc::call_command("d.set_directory", m_variables["directory"], rpc::make_target(download));
   else
-    rpc::call_command("d.set_directory", rtorrent->get_key("directory"), rpc::make_target(download));
+    rpc::call_command("d.set_directory_base", rtorrent->get_key("directory"), rpc::make_target(download));
 
   if (!m_session && m_variables["tied_to_file"].as_value())
     rpc::call_command("d.set_tied_to_file", m_uri, rpc::make_target(download));
 
   rpc::call_command("d.set_peer_exchange", rpc::call_command_value("get_peer_exchange"), rpc::make_target(download));
 
-  torrent::Object& resumeObject = root->has_key_map("libtorrent_resume")
-    ? root->get_key("libtorrent_resume")
-    : root->insert_key("libtorrent_resume", torrent::Object(torrent::Object::TYPE_MAP));
-
+  torrent::Object& resumeObject = root->insert_preserve_copy("libtorrent_resume", torrent::Object::create_map()).first->second;
   torrent::resume_load_addresses(*download->download(), resumeObject);
   torrent::resume_load_file_priorities(*download->download(), resumeObject);
   torrent::resume_load_tracker_settings(*download->download(), resumeObject);
@@ -259,6 +257,23 @@ DownloadFactory::receive_success() {
     if (m_manager->download_list()->find(infohash) == m_manager->download_list()->end())
       throw torrent::input_error("The newly created download was removed.");
 
+    // When a download scheduler is implemented, this is handled by
+    // the above insertion into download list.
+    if (m_session) {
+      // This torrent was queued for hashing or hashing when the
+      // session file was saved. Or it was in a started state.
+      if (rpc::call_command_value("d.get_hashing", rpc::make_target(download)) != Download::variable_hashing_stopped ||
+          rpc::call_command_value("d.get_state", rpc::make_target(download)) != 0)
+        m_manager->download_list()->resume(download);
+
+    } else {
+      // Use the state thingie here, move below.
+      if (m_start)
+        rpc::parse_command_single(rpc::make_target(download), "d.start=");
+
+      m_manager->download_store()->save(download);
+    }
+
   } catch (torrent::input_error& e) {
     std::string msg = "Command on torrent creation failed: " + std::string(e.what());
 
@@ -273,25 +288,6 @@ DownloadFactory::receive_success() {
       download->set_message(msg);
       //     m_manager->download_list()->erase(m_manager->download_list()->find(infohash.data()));
     }
-
-    return m_slotFinished();
-  }
-
-  // When a download scheduler is implemented, this is handled by the
-  // above insertion into download list.
-  if (m_session) {
-    // This torrent was queued for hashing or hashing when the session
-    // file was saved. Or it was in a started state.
-    if (rpc::call_command_value("d.get_hashing", rpc::make_target(download)) != Download::variable_hashing_stopped ||
-        rpc::call_command_value("d.get_state", rpc::make_target(download)) != 0)
-      m_manager->download_list()->resume(download);
-
-  } else {
-    // Use the state thingie here, move below.
-    if (m_start)
-      m_manager->download_list()->start_normal(download);
-
-    m_manager->download_store()->save(download);
   }
 
   m_slotFinished();
@@ -316,20 +312,20 @@ DownloadFactory::initialize_rtorrent(Download* download, torrent::Object* rtorre
   if (!rtorrent->has_key_value("state") || rtorrent->get_key_value("state") > 1) {
     rtorrent->insert_key("state", (int64_t)m_start);
     rtorrent->insert_key("state_changed", cachedTime.seconds());
+    rtorrent->insert_key("state_counter", int64_t());
 
   } else if (!rtorrent->has_key_value("state_changed") ||
-             rtorrent->get_key_value("state_changed") > cachedTime.seconds() || rtorrent->get_key_value("state_changed") == 0) {
+             rtorrent->get_key_value("state_changed") > cachedTime.seconds() || rtorrent->get_key_value("state_changed") == 0 ||
+             !rtorrent->has_key_value("state_counter") || (uint64_t)rtorrent->get_key_value("state_counter") > (1 << 20)) {
     rtorrent->insert_key("state_changed", cachedTime.seconds());
+    rtorrent->insert_key("state_counter", int64_t());
   }
 
-  if (!rtorrent->has_key_value("complete"))
-    rtorrent->insert_key("complete", (int64_t)0);
+  rtorrent->insert_preserve_copy("complete", (int64_t)0);
+  rtorrent->insert_preserve_copy("hashing",  (int64_t)Download::variable_hashing_stopped);
 
-  if (!rtorrent->has_key_value("hashing"))
-    rtorrent->insert_key("hashing", (int64_t)Download::variable_hashing_stopped);
-
-  if (!rtorrent->has_key_string("tied_to_file"))
-    rtorrent->insert_key("tied_to_file", std::string());
+  rtorrent->insert_preserve_copy("tied_to_file", "");
+  rtorrent->insert_key("loaded_file", m_isFile ? m_uri : std::string());
 
   if (rtorrent->has_key_value("priority"))
     rpc::call_command("d.set_priority", rtorrent->get_key_value("priority") % 4, rpc::make_target(download));
@@ -351,8 +347,10 @@ DownloadFactory::initialize_rtorrent(Download* download, torrent::Object* rtorre
     download->download()->set_chunks_done(std::min<uint32_t>(rtorrent->get_key_value("chunks_done"),
                                                              download->download()->file_list()->size_chunks()));
 
-  if (!rtorrent->has_key_value("ignore_commands"))
-    rtorrent->insert_key("ignore_commands", (int64_t)0);
+  rtorrent->insert_preserve_copy("ignore_commands", (int64_t)0);
+
+  rtorrent->insert_preserve_type("connection_leech", m_variables["connection_leech"]);
+  rtorrent->insert_preserve_type("connection_seed", m_variables["connection_seed"]);
 }
 
 }

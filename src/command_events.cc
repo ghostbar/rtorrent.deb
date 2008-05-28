@@ -65,15 +65,20 @@ apply_on_state_change(core::DownloadList::slot_map* slotMap, const torrent::Obje
   if (args.size() == 0 || args.size() > 2)
     throw torrent::input_error("Wrong number of arguments.");
 
-  if (args.front().as_string().empty())
+  const std::string& rawKey = args.front().as_string();
+
+  if (rawKey.empty())
     throw torrent::input_error("Empty key.");
 
-  std::string key = "1_state_" + args.front().as_string();
+  // If the key starts with '_' then it's supposed to be literal, with
+  // the initial '_' removed. This allows us to get proper ordering
+  // for internal rtorrent tasks.
+  std::string key = rawKey[0] != '_' ? ("1_state_" + rawKey) : rawKey.substr(1);
 
   if (args.size() == 1)
     slotMap->erase(key);
   else
-    (*slotMap)[key] = sigc::bind(sigc::ptr_fun(&rpc::parse_command_d_multiple_std), args.back().as_string());
+    (*slotMap)[key] = args.back().as_string();
 
   return torrent::Object();
 }
@@ -85,7 +90,7 @@ apply_on_ratio(int action, const torrent::Object& rawArgs) {
   if (args.empty())
     throw torrent::input_error("Too few arguments.");
 
-  torrent::Object::list_type::const_iterator argItr = args.begin();
+  torrent::Object::list_const_iterator argItr = args.begin();
 
   // first argument:  minimum ratio to reach
   // second argument: minimum upload amount to reach [optional]
@@ -97,30 +102,33 @@ apply_on_ratio(int action, const torrent::Object& rawArgs) {
   core::DownloadList* downloadList = control->core()->download_list();
 
   for  (core::Manager::DListItr itr = downloadList->begin();
-        (itr = std::find_if(itr, downloadList->end(), std::mem_fun(&core::Download::is_seeding))) != downloadList->end();
-        itr++) {
-    int64_t totalDone   = (*itr)->download()->bytes_done();
-    int64_t totalUpload = (*itr)->download()->up_rate()->total();
+        (itr = std::find_if(itr, downloadList->end(), std::mem_fun(&core::Download::is_seeding))) != downloadList->end(); ) {
+    core::Download* current = *itr++;
+
+    int64_t totalDone   = current->download()->bytes_done();
+    int64_t totalUpload = current->download()->up_rate()->total();
 
     if (!(totalUpload >= minUpload && totalUpload * 100 >= totalDone * minRatio) &&
         !(maxRatio > 0 && totalUpload * 100 > totalDone * maxRatio))
       continue;
 
-    bool success;
+    bool success = true;
 
     switch (action) {
-    case core::DownloadList::SLOTS_CLOSE: success = downloadList->close_try(*itr); break;
-    case core::DownloadList::SLOTS_STOP:  success = downloadList->stop_try(*itr); break;
+//     case core::DownloadList::SLOTS_CLOSE: success = downloadList->close_try(current); break;
+//     case core::DownloadList::SLOTS_STOP:  success = downloadList->stop_try(current); break;
+    case core::DownloadList::SLOTS_CLOSE: rpc::parse_command_single(rpc::make_target(current), "d.try_close="); break;
+    case core::DownloadList::SLOTS_STOP:  rpc::parse_command_single(rpc::make_target(current), "d.try_stop="); break;
     default: success = false; break;
     }
 
     if (!success)
       continue;
 
-    rpc::call_command("d.set_ignore_commands", (int64_t)1, rpc::make_target(*itr));
+    rpc::call_command("d.set_ignore_commands", (int64_t)1, rpc::make_target(current));
 
-    for (torrent::Object::list_type::const_iterator itr2 = argItr; itr2 != args.end(); itr2++)
-      rpc::parse_command_object(rpc::make_target(*itr), *itr2);
+    for (torrent::Object::list_const_iterator itr2 = argItr; itr2 != args.end(); itr2++)
+      rpc::parse_command_object(rpc::make_target(current), *itr2);
   }
 
   return torrent::Object();
@@ -136,7 +144,7 @@ apply_start_tied() {
     const std::string& tiedToFile = rpc::call_command_string("d.get_tied_to_file", rpc::make_target(*itr));
 
     if (!tiedToFile.empty() && fs.update(rak::path_expand(tiedToFile)))
-      control->core()->download_list()->start_try(*itr);
+      rpc::parse_command_single(rpc::make_target(*itr), "d.try_start=");
   }
 
   return torrent::Object();
@@ -152,7 +160,7 @@ apply_stop_untied() {
     const std::string& tiedToFile = rpc::call_command_string("d.get_tied_to_file", rpc::make_target(*itr));
 
     if (!tiedToFile.empty() && !fs.update(rak::path_expand(tiedToFile)))
-      control->core()->download_list()->stop_try(*itr);
+      rpc::parse_command_single(rpc::make_target(*itr), "d.try_stop=");
   }
 
   return torrent::Object();
@@ -165,7 +173,7 @@ apply_close_untied() {
     const std::string& tiedToFile = rpc::call_command_string("d.get_tied_to_file", rpc::make_target(*itr));
 
     if (rpc::call_command_value("d.get_ignore_commands", rpc::make_target(*itr)) == 0 && !tiedToFile.empty() && !fs.update(rak::path_expand(tiedToFile)))
-      control->core()->download_list()->close(*itr);
+      rpc::parse_command_single(rpc::make_target(*itr), "d.try_close=");
   }
 
   return torrent::Object();
@@ -198,7 +206,7 @@ apply_schedule(const torrent::Object& rawArgs) {
   if (args.size() != 4)
     throw torrent::input_error("Wrong number of arguments.");
 
-  torrent::Object::list_type::const_iterator itr = args.begin();
+  torrent::Object::list_const_iterator itr = args.begin();
 
   const std::string& arg1 = (itr++)->as_string();
   const std::string& arg2 = (itr++)->as_string();
@@ -212,8 +220,8 @@ apply_schedule(const torrent::Object& rawArgs) {
 
 torrent::Object
 apply_load(int flags, const torrent::Object& rawArgs) {
-  const torrent::Object::list_type&          args    = rawArgs.as_list();
-  torrent::Object::list_type::const_iterator argsItr = args.begin();
+  const torrent::Object::list_type&    args    = rawArgs.as_list();
+  torrent::Object::list_const_iterator argsItr = args.begin();
 
   if (argsItr == args.end())
     throw torrent::input_error("Too few arguments.");
@@ -260,7 +268,7 @@ apply_close_low_diskspace(int64_t arg) {
 torrent::Object
 apply_download_list(const torrent::Object& rawArgs) {
   const torrent::Object::list_type&          args    = rawArgs.as_list();
-  torrent::Object::list_type::const_iterator argsItr = args.begin();
+  torrent::Object::list_const_iterator argsItr = args.begin();
 
   core::ViewManager* viewManager = control->view_manager();
   core::ViewManager::iterator viewItr;
@@ -273,7 +281,7 @@ apply_download_list(const torrent::Object& rawArgs) {
   if (viewItr == viewManager->end())
     throw torrent::input_error("Could not find view.");
 
-  torrent::Object result(torrent::Object::TYPE_LIST);
+  torrent::Object result = torrent::Object::create_list();
   torrent::Object::list_type& resultList = result.as_list();
 
   for (core::View::const_iterator itr = (*viewItr)->begin_visible(), last = (*viewItr)->end_visible(); itr != last; itr++) {
@@ -316,13 +324,13 @@ d_multicall(const torrent::Object& rawArgs) {
 
   // Add some pre-parsing of the commands, so we don't spend time
   // parsing and searching command map for every single call.
-  torrent::Object             resultRaw(torrent::Object::TYPE_LIST);
+  torrent::Object             resultRaw = torrent::Object::create_list();
   torrent::Object::list_type& result = resultRaw.as_list();
 
   for (core::View::const_iterator vItr = (*viewItr)->begin_visible(), vLast = (*viewItr)->end_visible(); vItr != vLast; vItr++) {
-    torrent::Object::list_type& row = result.insert(result.end(), torrent::Object(torrent::Object::TYPE_LIST))->as_list();
+    torrent::Object::list_type& row = result.insert(result.end(), torrent::Object::create_list())->as_list();
 
-    for (torrent::Object::list_type::const_iterator cItr = ++args.begin(), cLast = args.end(); cItr != args.end(); cItr++) {
+    for (torrent::Object::list_const_iterator cItr = ++args.begin(), cLast = args.end(); cItr != args.end(); cItr++) {
       const std::string& cmd = cItr->as_string();
       row.push_back(rpc::parse_command(rpc::make_target(*vItr), cmd.c_str(), cmd.c_str() + cmd.size()).first);
     }
@@ -330,6 +338,14 @@ d_multicall(const torrent::Object& rawArgs) {
 
   return resultRaw;
 }
+
+torrent::Object
+cmd_call(const char* cmd, rpc::target_type target, const torrent::Object& rawArgs) {
+  rpc::parse_command_multiple(target, cmd);
+
+  return torrent::Object();
+}
+
 
 void
 initialize_command_events() {

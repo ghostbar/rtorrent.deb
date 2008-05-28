@@ -54,12 +54,13 @@ class Download;
 // Container for all downloads. Add slots to the slot maps to cause
 // some action to be taken when the torrent changes states. Don't
 // change the states from outside of core.
+//
+// Fix apply_on_ratio if the base_type is changed.
 
 class DownloadList : private std::list<Download*> {
 public:
-  typedef std::list<Download*>             base_type;
-  typedef sigc::slot1<void, Download*>     slot_type;
-  typedef std::map<std::string, slot_type> slot_map;
+  typedef std::list<Download*>               base_type;
+  typedef std::map<std::string, std::string> slot_map;
 
   using base_type::iterator;
   using base_type::const_iterator;
@@ -101,20 +102,14 @@ public:
   void                open_throw(Download* d);
 
   void                close(Download* d);
-  bool                close_try(Download* d);
   void                close_directly(Download* d);
   void                close_quick(Download* d);
   void                close_throw(Download* d);
 
-  void                start_normal(Download* d);
-  bool                start_try(Download* d);
-
-  void                stop_normal(Download* d);
-  bool                stop_try(Download* d);
-
   void                resume(Download* d, int flags = 0);
   void                pause(Download* d, int flags = 0);
 
+  void                resume_default(Download* d) { resume(d); }
   void                pause_default(Download* d) { pause(d); }
 
   void                check_hash(Download* d);

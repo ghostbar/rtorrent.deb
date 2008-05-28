@@ -36,72 +36,36 @@
 
 #include "config.h"
 
-#include <algorithm>
-#include <rak/functional.h>
-#include <torrent/exceptions.h>
+#include "core/manager.h"
+#include "core/download_list.h"
+#include "rpc/command_variable.h"
 
-#include "download.h"
-#include "download_list.h"
-#include "scheduler.h"
-#include "view.h"
+#include "globals.h"
+#include "control.h"
+#include "command_helpers.h"
 
-namespace core {
+torrent::Object
+cmd_scheduler_simple_added(core::Download* download, const torrent::Object& rawArgs) {
+  control->core()->download_list()->resume(download);
 
-// Change to unlimited.
-Scheduler::Scheduler(DownloadList* dl) :
-  m_view(NULL),
-  m_downloadList(dl),
-
-  m_maxActive(2),
-  m_cycle(1) {
+  return torrent::Object();
 }
 
-Scheduler::~Scheduler() {
-}
+torrent::Object
+cmd_scheduler_simple_removed(core::Download* download, const torrent::Object& rawArgs) {
+  control->core()->download_list()->pause(download);
 
-void
-Scheduler::set_view(View* view) {
-  m_view = view;
-}
-
-Scheduler::size_type
-Scheduler::active() const {
-  return std::count_if(m_view->begin_visible(), m_view->end_visible(), std::mem_fun(&Download::is_active));
+  return torrent::Object();
 }
 
 void
-Scheduler::update() {
-//   size_type curActive = active();
-  //  size_type curInactive = m_view->size() - curActive;
+initialize_command_scheduler() {
+//   core::DownloadList* dList = control->core()->download_list();
 
-  // Hmm... Perhaps we should use a more complex sorting thingie.
-//   m_view->sort();
+//   CMD_G("scheduler.active", rak::bind_ptr_fn(&cmd_call, "view.size=active"));
 
-  // Just a hack for now, need to take into consideration how many
-  // inactive we can switch with.
-//   size_type target = m_maxActive - std::min(m_cycle, m_maxActive);
+  CMD_V("scheduler.", "max_active", value, (int64_t)-1);
 
-//   for (View::iterator itr = m_view->begin_visible(), last = m_view->end_visible(); curActive > target; ++itr) {
-//     if (itr == last)
-//       throw torrent::internal_error("Scheduler::update() loop bork.");
-
-//     if ((*itr)->is_active()) {
-//       m_downloadList->pause(*itr);
-//       --curActive;
-//     }      
-//   }
-
-//   m_view->sort();
-
-//   for (View::iterator itr = m_view->begin_visible(), last = m_view->end_visible(); curActive < m_maxActive; ++itr) {
-//     if (itr == last)
-//       throw torrent::internal_error("Scheduler::update() loop bork.");
-
-//     if (!(*itr)->is_active()) {
-//       m_downloadList->start_try(*itr);
-//       ++curActive;
-//     }      
-//   }
-}
-
+  CMD_D_ANY("scheduler.simple.added",   rak::ptr_fn(&cmd_scheduler_simple_added));
+  CMD_D_ANY("scheduler.simple.removed", rak::ptr_fn(&cmd_scheduler_simple_removed));
 }

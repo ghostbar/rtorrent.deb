@@ -49,6 +49,7 @@
 #include <execinfo.h>
 #endif
 
+#include "core/dht_manager.h"
 #include "core/download.h"
 #include "core/download_factory.h"
 #include "core/download_store.h"
@@ -99,16 +100,21 @@ parse_options(Control* c, int argc, char** argv) {
 
 void
 load_session_torrents(Control* c) {
-  // Load session torrents.
-  std::list<std::string> l = c->core()->download_store()->get_formated_entries().make_list();
+  utils::Directory entries = c->core()->download_store()->get_formated_entries();
 
-  for (std::list<std::string>::iterator first = l.begin(), last = l.end(); first != last; ++first) {
+  for (utils::Directory::const_iterator first = entries.begin(), last = entries.end(); first != last; ++first) {
+    // We don't really support session torrents that are links. These
+    // would be overwritten anyway on exit, and thus not really be
+    // useful.
+    if (!first->is_file())
+      continue;
+
     core::DownloadFactory* f = new core::DownloadFactory(c->core());
 
     // Replace with session torrent flag.
     f->set_session(true);
     f->slot_finished(sigc::bind(sigc::ptr_fun(&rak::call_delete_func<core::DownloadFactory>), f));
-    f->load(*first);
+    f->load(entries.path() + first->d_name);
     f->commit();
   }
 }
@@ -174,50 +180,49 @@ main(int argc, char** argv) {
        "view_add = default\n"
 
        "view_add = name\n"
-       "view_sort_new = name,name\n"
-       "view_sort_current = name,name\n"
+       "view_sort_new     = name,less=d.get_name=\n"
+       "view_sort_current = name,less=d.get_name=\n"
+
+       "view_add = active\n"
+       "view_filter = active,false=\n"
 
        "view_add = started\n"
-       "view_filter = started,started\n"
-       "view_filter_on = started,start,stop\n"
-       "view_sort_new = started,name\n"
-       "view_sort_current = started,name\n"
+       "view_filter = started,false=\n"
+       "view.event_added = started,scheduler.simple.added=\n"
+       "view.event_removed = started,scheduler.simple.removed=\n"
 
        "view_add = stopped\n"
-       "view_filter = stopped,stopped\n"
-       "view_filter_on = stopped,start,stop\n"
-       "view_sort_new = stopped,name\n"
-       "view_sort_current = stopped,name\n"
+       "view_filter = stopped,false=\n"
 
        "view_add = complete\n"
-       "view_filter = complete,complete\n"
+       "view_filter = complete,d.get_complete=\n"
        "view_filter_on = complete,hash_done,finished\n"
-       "view_sort_new = complete,state_changed\n"
-       "view_sort_current = complete,state_changed_reverse\n"
+       "view_sort_new     = complete,less=d.get_state_changed=\n"
+       "view_sort_current = complete,less=d.get_state_changed=\n"
 
        "view_add = incomplete\n"
-       "view_filter = incomplete,incomplete\n"
+       "view_filter = incomplete,not=$d.get_complete=\n"
        "view_filter_on = incomplete,hash_done,finished\n"
-       "view_sort_new = incomplete,state_changed\n"
-       "view_sort_current = incomplete,state_changed_reverse\n"
+       "view_sort_new     = incomplete,less=d.get_state_changed=\n"
+       "view_sort_current = incomplete,less=d.get_state_changed=\n"
 
        // The hashing view does not include stopped torrents.
        "view_add = hashing\n"
-       "view_filter = hashing,hashing\n"
+       "view_filter = hashing,d.get_hashing=\n"
        "view_filter_on = hashing,hash_queued,hash_removed,hash_done\n"
-       "view_sort_new = hashing,state_changed\n"
-       "view_sort_current = hashing,state_changed\n"
+//        "view_sort_new     = hashing,less=d.get_state_changed=\n"
+//        "view_sort_current = hashing,less=d.get_state_changed=\n"
 
        "view_add = seeding\n"
-       "view_filter = seeding,started,complete\n"
+       "view_filter = seeding,\"and=d.get_state=,d.get_complete=\"\n"
        "view_filter_on = seeding,start,stop\n"
-       "view_sort_new = seeding,state_changed\n"
-       "view_sort_current = seeding,state_changed_reverse\n"
+       "view_sort_new     = seeding,less=d.get_state_changed=\n"
+       "view_sort_current = seeding,less=d.get_state_changed=\n"
 
        // Changing these will bork the (non-existant) scheduler.
        "view_add = scheduler\n"
-       "view_sort_new = scheduler,state_changed\n" // add started?
-       "view_sort_current = scheduler,state_changed\n"
+//        "view_sort_new     = scheduler,less=d.get_state_changed=\n"
+//        "view_sort_current = scheduler,less=d.get_state_changed=\n"
 
        //    "schedule = scheduler,10,10,download_scheduler=\n"
 
@@ -230,6 +235,7 @@ main(int argc, char** argv) {
 
        "schedule = session_save,1800,1800,session_save=\n"
        "schedule = low_diskspace,5,60,close_low_diskspace=500M\n"
+       "schedule = prune_file_status,3600,86400,system.file_status_cache.prune=\n"
 
        "encryption=allow_incoming,prefer_plaintext,enable_retry\n"
     );
@@ -245,6 +251,7 @@ main(int argc, char** argv) {
 
     // Load session torrents and perform scheduled tasks to ensure
     // session torrents are loaded before arg torrents.
+    control->dht_manager()->load_dht_cache();
     load_session_torrents(control);
     rak::priority_queue_perform(&taskScheduler, cachedTime);
 
@@ -270,15 +277,10 @@ main(int argc, char** argv) {
     }
 
     control->core()->download_list()->session_save();
-
     control->cleanup();
 
   } catch (std::exception& e) {
-    display::Canvas::cleanup();
-
-    // Safe to delete here? Seem to cause problems if cleanup hasn't
-    // been called.
-    //delete control;
+    control->cleanup_exception();
 
     std::cout << "rtorrent: " << e.what() << std::endl;
     return -1;

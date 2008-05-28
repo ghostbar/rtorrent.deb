@@ -34,51 +34,50 @@
 //           Skomakerveien 33
 //           3185 Skoppum, NORWAY
 
-#ifndef RTORRENT_RPC_SCGI_TASK_H
-#define RTORRENT_RPC_SCGI_TASK_H
+#ifndef RTORRENT_UTILS_FILE_STATUS_CACHE_H
+#define RTORRENT_UTILS_FILE_STATUS_CACHE_H
 
-#include <torrent/event.h>
+#include <map>
+#include <string>
 
 namespace utils {
-  class SocketFd;
-}
 
-namespace rpc {
+struct file_status {
+  int      m_flags;
+  uint32_t m_mtime;
+};
 
-class SCgi;
-
-class SCgiTask : public torrent::Event {
+class FileStatusCache : public std::map<std::string, file_status> {
 public:
-  static const unsigned int default_buffer_size = 2047;
-  static const          int max_header_size     = 2000;
-  static const          int max_content_size    = (2 << 20);
+  typedef std::map<std::string, file_status> base_type;
 
-  SCgiTask() { m_fileDesc = -1; }
+  using base_type::iterator;
+  using base_type::const_iterator;
+  using base_type::reverse_iterator;
+  using base_type::const_reverse_iterator;
+  using base_type::value_type;
 
-  bool                is_open() const      { return m_fileDesc != -1; }
-  bool                is_available() const { return m_fileDesc == -1; }
+  using base_type::begin;
+  using base_type::end;
+  using base_type::rbegin;
+  using base_type::rend;
 
-  void                open(SCgi* parent, int fd);
-  void                close();
+  using base_type::empty;
+  using base_type::size;
 
-  virtual void        event_read();
-  virtual void        event_write();
-  virtual void        event_error();
+  using base_type::erase;
 
-  bool                receive_write(const char* buffer, uint32_t length);
+  //  static int flag_
 
-  utils::SocketFd&    get_fd()            { return *reinterpret_cast<utils::SocketFd*>(&m_fileDesc); }
+  // Insert and return true if the entry does not exist or the new
+  // file's mtime is more recent.
+  bool                insert(const std::string& path, int flags);
 
-private:
-  inline void         realloc_buffer(uint32_t size, const char* buffer, uint32_t bufferSize);
+  // Add a function for pruning a sorted list of paths.
 
-  SCgi*               m_parent;
-
-  char*               m_buffer;
-  char*               m_position;
-  char*               m_body;
-
-  unsigned int        m_bufferSize;
+  // Function for pruning entries that no longer points to a file, or
+  // has a different mtime.
+  void                prune();
 };
 
 }

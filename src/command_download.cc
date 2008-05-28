@@ -46,6 +46,8 @@
 #include <torrent/tracker.h>
 #include <torrent/data/file.h>
 #include <torrent/data/file_list.h>
+#include <torrent/peer/connection_list.h>
+#include <torrent/peer/peer_list.h>
 
 #include "core/download.h"
 #include "core/manager.h"
@@ -87,7 +89,7 @@ apply_d_change_link(int changeType, core::Download* download, const torrent::Obj
   if (args.size() != 3)
     throw torrent::input_error("Wrong argument count.");
 
-  torrent::Object::list_type::const_iterator itr = args.begin();
+  torrent::Object::list_const_iterator itr = args.begin();
 
   const std::string& type    = (itr++)->as_string();
   const std::string& prefix  = (itr++)->as_string();
@@ -167,10 +169,22 @@ apply_d_connection_type(core::Download* download, const std::string& name) {
     connType = torrent::Download::CONNECTION_LEECH;
   else if (name == "seed")
     connType = torrent::Download::CONNECTION_SEED;
+  else if (name == "initial_seed")
+    connType = torrent::Download::CONNECTION_INITIAL_SEED;
   else
     throw torrent::input_error("Unknown peer connection type selected.");
 
   download->download()->set_connection_type(connType);
+}
+
+void
+apply_d_directory(core::Download* download, const std::string& name) {
+  if (!download->file_list()->is_multi_file())
+    download->set_root_directory(name);
+  else if (name.empty() || *name.rbegin() == '/')
+    download->set_root_directory(name + download->download()->name());
+  else
+    download->set_root_directory(name + "/" + download->download()->name());
 }
 
 const char*
@@ -180,6 +194,8 @@ retrieve_d_connection_type(core::Download* download) {
     return "leech";
   case torrent::Download::CONNECTION_SEED:
     return "seed";
+  case torrent::Download::CONNECTION_INITIAL_SEED:
+    return "initial_seed";
   default:
     return "unknown";
   }
@@ -233,6 +249,18 @@ retrieve_d_local_id_html(core::Download* download) {
   return torrent::Object(rak::copy_escape_html(hashString->begin(), hashString->end()));
 }
 
+// Just a helper function atm.
+torrent::Object
+cmd_d_initialize_logs(core::Download* download) {
+  download->download()->signal_network_log(sigc::mem_fun(control->core(), &core::Manager::push_log_complete));
+  download->download()->signal_storage_error(sigc::mem_fun(control->core(), &core::Manager::push_log_complete));
+
+  if (!rpc::call_command_string("get_tracker_dump").empty())
+    download->download()->signal_tracker_dump(sigc::ptr_fun(&core::receive_tracker_dump));
+
+  return torrent::Object();
+}
+
 torrent::Object
 f_multicall(core::Download* download, const torrent::Object& rawArgs) {
   const torrent::Object::list_type& args = rawArgs.as_list();
@@ -245,13 +273,13 @@ f_multicall(core::Download* download, const torrent::Object& rawArgs) {
 
   // Add some pre-parsing of the commands, so we don't spend time
   // parsing and searching command map for every single call.
-  torrent::Object             resultRaw(torrent::Object::TYPE_LIST);
+  torrent::Object             resultRaw = torrent::Object::create_list();
   torrent::Object::list_type& result = resultRaw.as_list();
 
   for (torrent::FileList::const_iterator itr = download->file_list()->begin(), last = download->file_list()->end(); itr != last; itr++) {
-    torrent::Object::list_type& row = result.insert(result.end(), torrent::Object(torrent::Object::TYPE_LIST))->as_list();
+    torrent::Object::list_type& row = result.insert(result.end(), torrent::Object::create_list())->as_list();
 
-    for (torrent::Object::list_type::const_iterator cItr = ++args.begin(), cLast = args.end(); cItr != args.end(); cItr++) {
+    for (torrent::Object::list_const_iterator cItr = ++args.begin(), cLast = args.end(); cItr != args.end(); cItr++) {
       const std::string& cmd = cItr->as_string();
       row.push_back(rpc::parse_command(rpc::make_target(*itr), cmd.c_str(), cmd.c_str() + cmd.size()).first);
     }
@@ -272,17 +300,45 @@ t_multicall(core::Download* download, const torrent::Object& rawArgs) {
 
   // Add some pre-parsing of the commands, so we don't spend time
   // parsing and searching command map for every single call.
-  torrent::Object             resultRaw(torrent::Object::TYPE_LIST);
+  torrent::Object             resultRaw = torrent::Object::create_list();
   torrent::Object::list_type& result = resultRaw.as_list();
 
   for (int itr = 0, last = download->tracker_list()->size(); itr != last; itr++) {
-    torrent::Object::list_type& row = result.insert(result.end(), torrent::Object(torrent::Object::TYPE_LIST))->as_list();
+    torrent::Object::list_type& row = result.insert(result.end(), torrent::Object::create_list())->as_list();
 
-    for (torrent::Object::list_type::const_iterator cItr = ++args.begin(), cLast = args.end(); cItr != args.end(); cItr++) {
+    for (torrent::Object::list_const_iterator cItr = ++args.begin(), cLast = args.end(); cItr != args.end(); cItr++) {
       const std::string& cmd = cItr->as_string();
-      torrent::Tracker t = download->tracker_list()->get(itr);
+      torrent::Tracker* t = download->tracker_list()->at(itr);
 
-      row.push_back(rpc::parse_command(rpc::make_target(&t), cmd.c_str(), cmd.c_str() + cmd.size()).first);
+      row.push_back(rpc::parse_command(rpc::make_target(t), cmd.c_str(), cmd.c_str() + cmd.size()).first);
+    }
+  }
+
+  return resultRaw;
+}
+
+torrent::Object
+p_multicall(core::Download* download, const torrent::Object& rawArgs) {
+  const torrent::Object::list_type& args = rawArgs.as_list();
+
+  if (args.empty())
+    throw torrent::input_error("Too few arguments.");
+
+  // We ignore the first arg for now, but it will be used for
+  // selecting what files to include.
+
+  // Add some pre-parsing of the commands, so we don't spend time
+  // parsing and searching command map for every single call.
+  torrent::Object             resultRaw = torrent::Object::create_list();
+  torrent::Object::list_type& result = resultRaw.as_list();
+
+  for (torrent::ConnectionList::const_iterator itr = download->connection_list()->begin(), last = download->connection_list()->end(); itr != last; itr++) {
+    torrent::Object::list_type& row = result.insert(result.end(), torrent::Object::create_list())->as_list();
+
+    for (torrent::Object::list_const_iterator cItr = ++args.begin(), cLast = args.end(); cItr != args.end(); cItr++) {
+      const std::string& cmd = cItr->as_string();
+
+      row.push_back(rpc::parse_command(rpc::make_target(*itr), cmd.c_str(), cmd.c_str() + cmd.size()).first);
     }
   }
 
@@ -291,11 +347,11 @@ t_multicall(core::Download* download, const torrent::Object& rawArgs) {
 
 #define ADD_CD_SLOT(key, function, slot, parm, doc)    \
   commandDownloadSlotsItr->set_slot(slot); \
-  rpc::commands.insert_download(key, commandDownloadSlotsItr++, &rpc::CommandSlot<core::Download*>::function, rpc::CommandMap::flag_dont_delete, parm, doc);
+  rpc::commands.insert_type(key, commandDownloadSlotsItr++, &rpc::CommandSlot<core::Download*>::function, rpc::CommandMap::flag_dont_delete, parm, doc);
 
 #define ADD_CD_SLOT_PUBLIC(key, function, slot, parm, doc)    \
   commandDownloadSlotsItr->set_slot(slot); \
-  rpc::commands.insert_download(key, commandDownloadSlotsItr++, &rpc::CommandSlot<core::Download*>::function, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, parm, doc);
+  rpc::commands.insert_type(key, commandDownloadSlotsItr++, &rpc::CommandSlot<core::Download*>::function, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, parm, doc);
 
 #define ADD_CD_VOID(key, slot) \
   ADD_CD_SLOT_PUBLIC("d.get_" key, call_unknown, rpc::object_fn(slot), "i:", "")
@@ -314,7 +370,7 @@ t_multicall(core::Download* download, const torrent::Object& rawArgs) {
 
 #define ADD_CD_VARIABLE_VALUE(key, firstKey, secondKey) \
   ADD_CD_SLOT_PUBLIC("d.get_" key, call_unknown, rpc::get_variable_d_fn(firstKey, secondKey), "i:", ""); \
-  ADD_CD_SLOT("d.set_" key, call_value,   rpc::set_variable_d_fn(firstKey, secondKey), "i:i", "");
+  ADD_CD_SLOT       ("d.set_" key, call_value,   rpc::set_variable_d_fn(firstKey, secondKey), "i:i", "");
 
 #define ADD_CD_VARIABLE_VALUE_PUBLIC(key, firstKey, secondKey) \
   ADD_CD_SLOT_PUBLIC("d.get_" key, call_unknown, rpc::get_variable_d_fn(firstKey, secondKey), "i:", ""); \
@@ -322,7 +378,7 @@ t_multicall(core::Download* download, const torrent::Object& rawArgs) {
 
 #define ADD_CD_VARIABLE_STRING(key, firstKey, secondKey) \
   ADD_CD_SLOT_PUBLIC("d.get_" key, call_unknown, rpc::get_variable_d_fn(firstKey, secondKey), "i:", ""); \
-  ADD_CD_SLOT("d.set_" key, call_string,  rpc::set_variable_d_fn(firstKey, secondKey), "i:s", "");
+  ADD_CD_SLOT       ("d.set_" key, call_string,  rpc::set_variable_d_fn(firstKey, secondKey), "i:s", "");
 
 #define ADD_CD_VARIABLE_STRING_PUBLIC(key, firstKey, secondKey) \
   ADD_CD_SLOT_PUBLIC("d.get_" key, call_unknown, rpc::get_variable_d_fn(firstKey, secondKey), "i:", ""); \
@@ -370,6 +426,7 @@ initialize_command_download() {
   ADD_CD_VOID("base_filename", &retrieve_d_base_filename);
   ADD_CD_STRING_UNI("name",    rak::on(std::mem_fun(&core::Download::download), std::mem_fun(&torrent::Download::name)));
 
+  // ?????
   ADD_CD_LIST_OBSOLETE("create_link",   rak::bind_ptr_fn(&apply_d_change_link, 0));
   ADD_CD_LIST_OBSOLETE("delete_link",   rak::bind_ptr_fn(&apply_d_change_link, 1));
 
@@ -377,8 +434,14 @@ initialize_command_download() {
   ADD_CD_LIST("delete_link",   rak::bind_ptr_fn(&apply_d_change_link, 1));
   ADD_CD_V_VOID("delete_tied", &apply_d_delete_tied);
 
-  ADD_CD_F_VOID("start",      rak::make_mem_fun(control->core()->download_list(), &core::DownloadList::start_normal));
-  ADD_CD_F_VOID("stop",       rak::make_mem_fun(control->core()->download_list(), &core::DownloadList::stop_normal));
+  ADD_ANY_NONE("d.start",     rak::bind_ptr_fn(&cmd_call, "d.set_hashing_failed=0 ;d.set_state=1 ;view.set_not_visible=stopped ;view.set_visible=started"));
+  ADD_ANY_NONE("d.stop",      rak::bind_ptr_fn(&cmd_call, "d.set_state=0 ;view.set_visible=stopped ;view.set_not_visible=started"));
+  ADD_ANY_NONE("d.try_start", rak::bind_ptr_fn(&cmd_call, "branch=\"or={d.get_hashing_failed=,d.get_ignore_commands=}\",{},{d.set_state=1,view.set_not_visible=stopped,view.set_visible=started}"));
+  ADD_ANY_NONE("d.try_stop",  rak::bind_ptr_fn(&cmd_call, "branch=d.get_ignore_commands=, {}, {d.set_state=0, view.set_visible=stopped, view.set_not_visible=started}"));
+  ADD_ANY_NONE("d.try_close", rak::bind_ptr_fn(&cmd_call, "branch=d.get_ignore_commands=, {}, {d.set_state=0, view.set_visible=stopped, view.set_not_visible=started, d.close=}"));
+
+  ADD_CD_F_VOID("resume",     rak::make_mem_fun(control->core()->download_list(), &core::DownloadList::resume_default));
+  ADD_CD_F_VOID("pause",      rak::make_mem_fun(control->core()->download_list(), &core::DownloadList::pause_default));
   ADD_CD_F_VOID("open",       rak::make_mem_fun(control->core()->download_list(), &core::DownloadList::open_throw));
   ADD_CD_F_VOID("close",      rak::make_mem_fun(control->core()->download_list(), &core::DownloadList::close_throw));
   ADD_CD_F_VOID("erase",      rak::make_mem_fun(control->core()->download_list(), &core::DownloadList::erase_ptr));
@@ -415,38 +478,40 @@ initialize_command_download() {
   // 1 - Normal hashing
   // 2 - Download finished, hashing
   // 3 - Rehashing
-  ADD_CD_VARIABLE_VALUE("hashing", "rtorrent", "hashing");
-  ADD_CD_VARIABLE_STRING("tied_to_file", "rtorrent", "tied_to_file");
+  ADD_CD_VARIABLE_VALUE("hashing",       "rtorrent", "hashing");
+
+  // 'tied_to_file' is the file the download is associated with, and
+  // can be changed by the user.
+  //
+  // 'loaded_file' is the file this instance of the torrent was loaded
+  // from, and should not be changed.
+  ADD_CD_VARIABLE_STRING_PUBLIC("tied_to_file", "rtorrent", "tied_to_file");
+  ADD_CD_VARIABLE_STRING       ("loaded_file",  "rtorrent", "loaded_file");
 
   // The "state_changed" variable is required to be a valid unix time
   // value, it indicates the last time the torrent changed its state,
   // resume/pause.
-  ADD_CD_VARIABLE_VALUE("state_changed", "rtorrent", "state_changed");
+  ADD_CD_VARIABLE_VALUE("state_changed",          "rtorrent", "state_changed");
+  ADD_CD_VARIABLE_VALUE("state_counter",          "rtorrent", "state_counter");
   ADD_CD_VARIABLE_VALUE_PUBLIC("ignore_commands", "rtorrent", "ignore_commands");
 
   ADD_CD_STRING_BI("connection_current", std::ptr_fun(&apply_d_connection_type), std::ptr_fun(&retrieve_d_connection_type));
+  ADD_CD_VARIABLE_STRING("connection_leech",      "rtorrent", "connection_leech");
+  ADD_CD_VARIABLE_STRING("connection_seed",       "rtorrent", "connection_seed");
+
+  ADD_CD_VALUE_BI("hashing_failed",      std::mem_fun(&core::Download::set_hash_failed), std::mem_fun(&core::Download::is_hash_failed));
 
   // This command really needs to be improved, so we have proper
   // logging support.
   ADD_CD_STRING_BI("message",            std::mem_fun(&core::Download::set_message), std::mem_fun(&core::Download::message));
 
-  add_copy_to_download("get_connection_leech", "d.get_connection_leech");
-  add_copy_to_download("set_connection_leech", "d.set_connection_leech");
-  add_copy_to_download("get_connection_seed", "d.get_connection_seed");
-  add_copy_to_download("set_connection_seed", "d.set_connection_seed");
-
   ADD_CD_VALUE_MEM_BI("max_file_size", &core::Download::file_list, &torrent::FileList::set_max_file_size, &torrent::FileList::max_file_size);
 
-  // Deprecated.
-  ADD_CD_VALUE_MEM_BI("min_peers",     &core::Download::download, &torrent::Download::set_peers_min, &torrent::Download::peers_min);
-  ADD_CD_VALUE_MEM_BI("max_peers",     &core::Download::download, &torrent::Download::set_peers_max, &torrent::Download::peers_max);
-  ADD_CD_VALUE_MEM_BI("max_uploads",   &core::Download::download, &torrent::Download::set_uploads_max, &torrent::Download::uploads_max);
-
-  ADD_CD_VALUE_MEM_BI("peers_min",        &core::Download::download, &torrent::Download::set_peers_min, &torrent::Download::peers_min);
-  ADD_CD_VALUE_MEM_BI("peers_max",        &core::Download::download, &torrent::Download::set_peers_max, &torrent::Download::peers_max);
+  ADD_CD_VALUE_MEM_BI("peers_min",        &core::Download::connection_list, &torrent::ConnectionList::set_min_size, &torrent::ConnectionList::min_size);
+  ADD_CD_VALUE_MEM_BI("peers_max",        &core::Download::connection_list, &torrent::ConnectionList::set_max_size, &torrent::ConnectionList::max_size);
   ADD_CD_VALUE_MEM_BI("uploads_max",      &core::Download::download, &torrent::Download::set_uploads_max, &torrent::Download::uploads_max);
-  ADD_CD_VALUE_UNI("peers_connected",     rak::on(std::mem_fun(&core::Download::download), std::mem_fun(&torrent::Download::peers_connected)));
-  ADD_CD_VALUE_UNI("peers_not_connected", rak::on(std::mem_fun(&core::Download::download), std::mem_fun(&torrent::Download::peers_not_connected)));
+  ADD_CD_VALUE_UNI("peers_connected",     std::mem_fun(&core::Download::connection_list_size));
+  ADD_CD_VALUE_UNI("peers_not_connected", rak::on(std::mem_fun(&core::Download::c_peer_list), std::mem_fun(&torrent::PeerList::available_list_size)));
   ADD_CD_VALUE_UNI("peers_complete",      rak::on(std::mem_fun(&core::Download::download), std::mem_fun(&torrent::Download::peers_complete)));
   ADD_CD_VALUE_UNI("peers_accounted",     rak::on(std::mem_fun(&core::Download::download), std::mem_fun(&torrent::Download::peers_accounted)));
 
@@ -477,14 +542,20 @@ initialize_command_download() {
 
   ADD_CD_VALUE_UNI("chunk_size",          rak::on(std::mem_fun(&core::Download::file_list), std::mem_fun(&torrent::FileList::chunk_size)));
 
-  ADD_CD_VALUE_MEM_BI("tracker_numwant", &core::Download::tracker_list, &torrent::TrackerList::set_numwant, &torrent::TrackerList::numwant);
-  ADD_CD_VALUE_UNI("tracker_focus",      rak::on(std::mem_fun(&core::Download::tracker_list), std::mem_fun(&torrent::TrackerList::focus)));
-  ADD_CD_VALUE_UNI("tracker_size",       rak::on(std::mem_fun(&core::Download::tracker_list), std::mem_fun(&torrent::TrackerList::size)));
+  ADD_CD_VALUE_MEM_BI("tracker_numwant",  &core::Download::tracker_list, &torrent::TrackerList::set_numwant, &torrent::TrackerList::numwant);
+  ADD_CD_VALUE_UNI("tracker_focus",       rak::on(std::mem_fun(&core::Download::tracker_list), std::mem_fun(&torrent::TrackerList::focus_index)));
+  ADD_CD_VALUE_UNI("tracker_size",        std::mem_fun(&core::Download::tracker_list_size));
 
-  ADD_CD_STRING_BI("directory",        std::mem_fun(&core::Download::set_root_directory), rak::on(std::mem_fun(&core::Download::file_list), std::mem_fun(&torrent::FileList::root_dir)));
-  ADD_CD_VALUE_BI("priority",          std::mem_fun(&core::Download::set_priority), std::mem_fun(&core::Download::priority));
-  ADD_CD_STRING_UNI("priority_str",    std::ptr_fun(&retrieve_d_priority_str));
+  ADD_CD_STRING_BI("directory",           std::ptr_fun(&apply_d_directory), rak::on(std::mem_fun(&core::Download::file_list), std::mem_fun(&torrent::FileList::root_dir)));
+  ADD_CD_STRING_BI("directory_base",      std::mem_fun(&core::Download::set_root_directory), rak::on(std::mem_fun(&core::Download::file_list), std::mem_fun(&torrent::FileList::root_dir)));
 
-  ADD_CD_SLOT_PUBLIC("f.multicall",    call_list, rak::ptr_fn(&f_multicall), "i:", "")
-  ADD_CD_SLOT_PUBLIC("t.multicall",    call_list, rak::ptr_fn(&t_multicall), "i:", "")
+  ADD_CD_VALUE_BI("priority",             std::mem_fun(&core::Download::set_priority), std::mem_fun(&core::Download::priority));
+  ADD_CD_STRING_UNI("priority_str",       std::ptr_fun(&retrieve_d_priority_str));
+
+  ADD_CD_SLOT_PUBLIC("f.multicall",       call_list, rak::ptr_fn(&f_multicall), "i:", "");
+  ADD_CD_SLOT_PUBLIC("p.multicall",       call_list, rak::ptr_fn(&p_multicall), "i:", "");
+  ADD_CD_SLOT_PUBLIC("t.multicall",       call_list, rak::ptr_fn(&t_multicall), "i:", "");
+
+  // NEWISH:
+  CMD_D_VOID("d.initialize_logs",         &cmd_d_initialize_logs);
 }

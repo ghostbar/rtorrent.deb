@@ -98,7 +98,7 @@ DownloadList::activate(display::Frame* frame, bool focus) {
   m_frame = frame;
 
   control->input()->push_back(&m_bindings);
-  control->core()->download_list()->slot_map_erase()["0_download_list"] = sigc::mem_fun(this, &DownloadList::receive_download_erased);
+  control->core()->download_list()->slot_map_erase()["0_download_list"] = "ui.unfocus_download=";
 
   activate_display(DISPLAY_DOWNLOAD_LIST);
 }
@@ -119,6 +119,18 @@ DownloadList::disable() {
 core::View*
 DownloadList::current_view() {
   return dynamic_cast<ElementDownloadList*>(m_uiArray[DISPLAY_DOWNLOAD_LIST])->view();
+}
+
+// This should also do focus_next() or something.
+void
+DownloadList::unfocus_download(core::Download* d) {
+  if (current_view()->focus() >= current_view()->end_visible() || *current_view()->focus() != d)
+    return;
+
+  if (m_state == DISPLAY_DOWNLOAD)
+    activate_display(DISPLAY_DOWNLOAD_LIST);
+
+  current_view()->next_focus();
 }
 
 void
@@ -255,7 +267,7 @@ DownloadList::receive_view_input(Input type) {
   input->signal_show_next().connect(sigc::mem_fun(*esl, &ElementStringList::next_screen));
 
   input->signal_show_range().connect(sigc::hide(sigc::hide(sigc::bind(sigc::mem_fun(*this, &DownloadList::activate_display), DISPLAY_STRING_LIST))));
-  input->signal_show_range().connect(sigc::mem_fun(*esl, &ElementStringList::set_range<utils::Directory::iterator>));
+  input->signal_show_range().connect(sigc::mem_fun(*esl, &ElementStringList::set_range_dirent<utils::Directory::iterator>));
 
   input->bindings()['\n']      = sigc::bind(sigc::mem_fun(*this, &DownloadList::receive_exit_input), type);
   input->bindings()[KEY_ENTER] = sigc::bind(sigc::mem_fun(*this, &DownloadList::receive_exit_input), type);
@@ -314,14 +326,6 @@ DownloadList::receive_exit_input(Input type) {
   activate_display(DISPLAY_DOWNLOAD_LIST);
 
   delete input;
-}
-
-void
-DownloadList::receive_download_erased(core::Download* d) {
-  if (m_state != DISPLAY_DOWNLOAD || current_view()->focus() == current_view()->end_visible() || *current_view()->focus() != d)
-    return;
-
-  activate_display(DISPLAY_DOWNLOAD_LIST);
 }
 
 void
