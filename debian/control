@@ -5,16 +5,15 @@ Maintainer: Jose Luis Rivas <ghostbar38@gmail.com>
 Uploaders: Arnaud Fontaine <arnaud@andesi.org>
 Build-Depends: debhelper (>= 5), cdbs, libtorrent-dev (>=0.12.2), libsigc++-2.0-dev, libcurl4-openssl-dev, libncursesw5-dev, bc, libxmlrpc-c3-dev (>= 1.06)
 Standards-Version: 3.7.3
-XS-Vcs-Git: git://git.ghostbar.ath.cx/debian/rtorrent.git
-XS-Vcs-browser: http://git.ghostbar.ath.cx/?p=debian/rtorrent.git;a=summary
+XS-Vcs-Bzr: http://bzr.debian.org/collab-maint/rtorrent/
 Homepage: http://libtorrent.rakshasa.no/
 
 Package: rtorrent
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: ncurses BitTorrent client based on LibTorrent from rakshasa
+Description: ncurses BitTorrent client based on LibTorrent
  rtorrent is a BitTorrent client based on LibTorrent.  It uses ncurses
- and is therefore ideal to use with screen.
+ and is therefor ideal to use with screen.
  .
  Features:
   * Use an URL or file path to add torrents at runtime
