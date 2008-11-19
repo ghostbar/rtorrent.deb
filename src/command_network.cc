@@ -261,10 +261,10 @@ apply_scgi(const std::string& arg, int type) {
       break;
     }
 
-    rak::address_info::free_address_info(ai);
+    if (ai != NULL) rak::address_info::free_address_info(ai);
 
   } catch (torrent::local_error& e) {
-    rak::address_info::free_address_info(ai);
+    if (ai != NULL) rak::address_info::free_address_info(ai);
 
     throw torrent::input_error(e.what());
   }
@@ -291,7 +291,7 @@ apply_xmlrpc_dialect(const std::string& arg) {
 void
 initialize_command_network() {
   torrent::ConnectionManager* cm = torrent::connection_manager();
-  core::CurlStack* httpStack = control->core()->get_poll_manager()->get_http_stack();
+  core::CurlStack* httpStack = control->core()->http_stack();
 
   ADD_VARIABLE_BOOL("use_udp_trackers", true);
 

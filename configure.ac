@@ -1,4 +1,4 @@
-AC_INIT(rtorrent, 0.8.2, jaris@ifi.uio.no)
+AC_INIT(rtorrent, 0.8.3, jaris@ifi.uio.no)
 
 AM_INIT_AUTOMAKE
 AM_CONFIG_HEADER(config.h)
@@ -26,9 +26,17 @@ TORRENT_WITHOUT_NCURSESW()
 TORRENT_WITHOUT_STATVFS()
 TORRENT_WITHOUT_STATFS()
 
-PKG_CHECK_MODULES(STUFF, sigc++-2.0 libcurl >= 7.12.0 libtorrent >= 0.12.2,
-	          CXXFLAGS="$CXXFLAGS $STUFF_CFLAGS";
-		  LIBS="$LIBS $STUFF_LIBS")
+PKG_CHECK_MODULES(sigc, sigc++-2.0,
+	          CXXFLAGS="$CXXFLAGS $sigc_CFLAGS";
+		  LIBS="$LIBS $sigc_LIBS")
+
+PKG_CHECK_MODULES(libcurl, libcurl >= 7.15.4,
+	          CXXFLAGS="$CXXFLAGS $libcurl_CFLAGS";
+		  LIBS="$LIBS $libcurl_LIBS")
+
+PKG_CHECK_MODULES(libtorrent, libtorrent >= 0.12.2,
+	          CXXFLAGS="$CXXFLAGS $libtorrent_CFLAGS";
+		  LIBS="$LIBS $libtorrent_LIBS")
 
 AC_LANG_PUSH(C++)
 TORRENT_WITH_XMLRPC_C
