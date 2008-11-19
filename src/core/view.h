@@ -64,6 +64,7 @@ class Download;
 class View : private std::vector<Download*> {
 public:
   typedef std::vector<Download*>         base_type;
+  typedef std::vector<std::string>       event_list_type;
   typedef sigc::signal0<void>            signal_type;
 
   using base_type::iterator;
@@ -121,11 +122,14 @@ public:
   void                filter();
   void                filter_download(core::Download* download);
 
+  const std::string&  get_filter() const { return m_filter; }
   void                set_filter(const std::string& s)        { m_filter = s; }
-  void                set_filter_on(int event);
+  void                set_filter_on_event(const std::string& event);
 
   void                clear_filter_on();
 
+  const std::string&  get_event_added() const { return m_eventAdded; }
+  const std::string&  get_event_removed() const { return m_eventRemoved; }
   void                set_event_added(const std::string& cmd)   { m_eventAdded = cmd; }
   void                set_event_removed(const std::string& cmd) { m_eventRemoved = cmd; }
 
@@ -167,6 +171,7 @@ private:
   std::string         m_sortCurrent;
 
   std::string         m_filter;
+  event_list_type     m_events;
 
   std::string         m_eventAdded;
   std::string         m_eventRemoved;

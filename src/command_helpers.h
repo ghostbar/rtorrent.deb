@@ -38,16 +38,19 @@
 #define RTORRENT_UTILS_COMMAND_HELPERS_H
 
 #include "rpc/command_slot.h"
+#include "rpc/command_function.h"
 #include "rpc/parse_commands.h"
 
 namespace rpc {
   class CommandVariable;
+  class CommandObjectPtr;
 }
 
 // By using a static array we avoid allocating the variables on the
 // heap. This should reduce memory use and improve cache locality.
 #define COMMAND_SLOTS_SIZE          200
 #define COMMAND_VARIABLES_SIZE      100
+#define COMMAND_OBJECT_PTR_SIZE     20
 #define COMMAND_DOWNLOAD_SLOTS_SIZE 150
 #define COMMAND_FILE_SLOTS_SIZE     30
 #define COMMAND_FILE_ITR_SLOTS_SIZE 10
@@ -61,6 +64,8 @@ extern rpc::CommandSlot<void>    commandSlots[COMMAND_SLOTS_SIZE];
 extern rpc::CommandSlot<void>*   commandSlotsItr;
 extern rpc::CommandVariable      commandVariables[COMMAND_VARIABLES_SIZE];
 extern rpc::CommandVariable*     commandVariablesItr;
+extern rpc::CommandObjectPtr     commandObjectPtrs[COMMAND_OBJECT_PTR_SIZE];
+extern rpc::CommandObjectPtr*    commandObjectPtrsItr;
 extern rpc::CommandSlot<core::Download*>             commandDownloadSlots[COMMAND_DOWNLOAD_SLOTS_SIZE];
 extern rpc::CommandSlot<core::Download*>*            commandDownloadSlotsItr;
 extern rpc::CommandSlot<torrent::File*>              commandFileSlots[COMMAND_FILE_SLOTS_SIZE];
@@ -78,10 +83,8 @@ void initialize_commands();
 
 void
 add_variable(const char* getKey, const char* setKey, const char* defaultSetKey,
-             rpc::Command::generic_slot getSlot, rpc::Command::generic_slot setSlot,
+             rpc::Command::cleaned_slot getSlot, rpc::Command::cleaned_slot setSlot,
              const torrent::Object& defaultObject);
-
-extern torrent::Object cmd_call(const char* cmd, rpc::target_type target, const torrent::Object& rawArgs);
 
 #define ADD_VARIABLE_BOOL(key, defaultValue) \
 add_variable("get_" key, "set_" key, key, &rpc::CommandVariable::get_bool, &rpc::CommandVariable::set_bool, (int64_t)defaultValue);
@@ -194,9 +197,27 @@ add_variable(key, NULL, NULL, &rpc::CommandVariable::get_string, NULL, std::stri
 #define CMD_G_STRING(key, slot) \
   CMD_G_SLOT(key, call_string, slot, "i:", "")
 
+#define CMD_N_SLOT(key, function, slot, parm, doc)    \
+  commandAnySlotsItr->set_slot(slot); \
+  rpc::commands.insert_type(key, commandAnySlotsItr++, &rpc::CommandSlot<rpc::target_type>::function, \
+                            rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_no_target | rpc::CommandMap::flag_public_xmlrpc, parm, doc);
+
+#define CMD_N(key, slot) \
+  CMD_N_SLOT(key, call_unknown, slot, "i:", "")
+
+#define CMD_N_STRING(key, slot) \
+  CMD_N_SLOT(key, call_string, slot, "i:", "")
+
+#define CMD_N_LIST(key, slot) \
+  CMD_N_SLOT(key, call_list, slot, "i:", "")
+
 #define CMD_D_SLOT(key, function, slot, parm, doc)    \
   commandDownloadSlotsItr->set_slot(slot); \
-  rpc::commands.insert_type(key, commandDownloadSlotsItr++, &rpc::CommandSlot<core::Download*>::function, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, parm, doc);
+  rpc::commands.insert_type(key, commandDownloadSlotsItr++, &rpc::CommandSlot<core::Download*>::function, \
+                            rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, parm, doc);
+
+#define CMD_D(key, slot) \
+  CMD_D_SLOT(key, call_unknown, slot, "i:", "")
 
 #define CMD_D_ANY(key, slot) \
   CMD_D_SLOT(key, call_unknown, slot, "i:", "")
@@ -206,5 +227,12 @@ add_variable(key, NULL, NULL, &rpc::CommandVariable::get_string, NULL, std::stri
 
 #define CMD_D_VOID(key, slot) \
   CMD_D_SLOT(key, call_unknown, rpc::object_fn(slot), "i:", "")
+
+#define CMD_FUNC_SINGLE(key, command) \
+  rpc::commands.insert_type(key, new rpc::CommandFunction(command), &rpc::CommandFunction::call, rpc::CommandMap::flag_public_xmlrpc, NULL, NULL);
+
+#define CMD_OBJ_P(key, function, target) \
+  commandObjectPtrsItr->set_object(target); \
+  rpc::commands.insert_type(key, commandObjectPtrsItr++, &rpc::CommandObjectPtr::function, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, NULL, NULL);
 
 #endif

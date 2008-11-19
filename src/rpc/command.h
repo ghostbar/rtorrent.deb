@@ -52,6 +52,20 @@ namespace torrent {
 
 namespace rpc {
 
+template <typename Target>
+struct target_wrapper {
+  typedef Target      target_type; 
+  typedef Target      cleaned_type;
+};
+
+template <>
+struct target_wrapper<void> {
+  struct no_type {};
+
+  typedef void        target_type; 
+  typedef no_type*    cleaned_type;
+};
+
 // Since c++0x isn't out yet...
 template <typename T1, typename T2, typename T3>
 struct rt_triple : private std::pair<T1, T2> {
@@ -95,6 +109,7 @@ public:
   typedef torrent::Object::key_type    key_type;
 
   typedef const torrent::Object (*generic_slot)  (Command*, const torrent::Object&);
+  typedef const torrent::Object (*cleaned_slot)  (Command*, target_wrapper<void>::cleaned_type, const torrent::Object&);
   typedef const torrent::Object (*any_slot)      (Command*, target_type, const torrent::Object&);
   typedef const torrent::Object (*download_slot) (Command*, core::Download*, const torrent::Object&);
   typedef const torrent::Object (*file_slot)     (Command*, torrent::File*, const torrent::Object&);
@@ -117,9 +132,18 @@ public:
   Command() {}
   virtual ~Command() {}
 
+  static torrent::Object* argument(unsigned int index) { return m_arguments + index; }
+
 protected:
   Command(const Command&);
   void operator = (const Command&);
+
+  // For use by functions that need to use placeholders to arguments
+  // within commands. E.d. callable command strings where one of the
+  // arguments within the command needs to be supplied by the caller.
+  static const unsigned int max_arguments = 10;
+
+  static torrent::Object m_arguments[max_arguments];
 };
 
 template <typename T1 = void, typename T2 = void>
@@ -127,7 +151,8 @@ struct target_type_id {
   // Nothing here, so we cause an error.
 };
 
-template <> struct target_type_id<Command::generic_slot>       { static const int value = Command::target_generic; };
+//template <> struct target_type_id<Command::generic_slot>       { static const int value = Command::target_generic; };
+template <> struct target_type_id<Command::cleaned_slot>       { static const int value = Command::target_generic; };
 template <> struct target_type_id<Command::any_slot>           { static const int value = Command::target_any; };
 template <> struct target_type_id<Command::download_slot>      { static const int value = Command::target_download; };
 template <> struct target_type_id<Command::peer_slot>          { static const int value = Command::target_peer; };

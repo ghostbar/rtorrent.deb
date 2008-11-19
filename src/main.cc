@@ -171,8 +171,59 @@ main(int argc, char** argv) {
     // torrent::ConnectionManager* are valid etc.
     initialize_commands();
 
-    rpc::parse_command_multiple(rpc::make_target(),
-//       "set_name = $cat={$system.hostname=,:,$system.pid=}\n"
+    rpc::parse_command_multiple
+      (rpc::make_target(),
+//        "system.method.insert = test.value,value\n"
+//        "system.method.insert = test.value2,value,6\n"
+
+//        "system.method.insert = test.string,string,6\n"
+//        "system.method.insert = test.bool,bool,true\n"
+
+       "system.method.insert = test.method.simple,simple,\"print=simple_test_,$argument.0=\"\n"
+
+       "system.method.insert = event.download.inserted,multi\n"
+       "system.method.insert = event.download.inserted_new,multi\n"
+       "system.method.insert = event.download.inserted_session,multi\n"
+       "system.method.insert = event.download.erased,multi\n"
+       "system.method.insert = event.download.opened,multi\n"
+       "system.method.insert = event.download.closed,multi\n"
+       "system.method.insert = event.download.resumed,multi\n"
+       "system.method.insert = event.download.paused,multi\n"
+       
+       "system.method.insert = event.download.finished,multi\n"
+       "system.method.insert = event.download.hash_done,multi\n"
+       "system.method.insert = event.download.hash_removed,multi\n"
+       "system.method.insert = event.download.hash_queued,multi\n"
+
+       "system.method.set_key = event.download.inserted,         1_connect_logs, d.initialize_logs=\n"
+       "system.method.set_key = event.download.inserted_new,     1_prepare, \"branch=d.get_state=,view.set_visible=started,view.set_visible=stopped ;d.save_session=\"\n"
+       "system.method.set_key = event.download.inserted_session, 1_prepare, \"branch=d.get_state=,view.set_visible=started,view.set_visible=stopped\"\n"
+
+       "system.method.set_key = event.download.erased, 0_download_list, ui.unfocus_download=\n"
+       "system.method.set_key = event.download.erased, 9_delete_tied, d.delete_tied=\n"
+
+       "system.method.insert = ratio.enable, simple|static|const,group.seeding.ratio.enable=\n"
+       "system.method.insert = ratio.disable,simple|static|const,group.seeding.ratio.disable=\n"
+       "system.method.insert = ratio.min,    simple|static|const,group.seeding.ratio.min=\n"
+       "system.method.insert = ratio.max,    simple|static|const,group.seeding.ratio.max=\n"
+       "system.method.insert = ratio.upload, simple|static|const,group.seeding.ratio.upload=\n"
+       "system.method.insert = ratio.min.set,   simple|static|const,group.seeding.ratio.min.set=$argument.0=\n"
+       "system.method.insert = ratio.max.set,   simple|static|const,group.seeding.ratio.max.set=$argument.0=\n"
+       "system.method.insert = ratio.upload.set,simple|static|const,group.seeding.ratio.upload.set=$argument.0=\n"
+
+       "system.method.insert = group.insert_persistent_view,simple|static|const,"
+       "view_add=$argument.0=,view.persistent=$argument.0=,\"group.insert=$argument.0=,$argument.0=\"\n"
+
+       // Allow setting 'group.view' as constant, so that we can't
+       // modify the value. And look into the possibility of making
+       // 'const' use non-heap memory, as we know they can't be
+       // erased.
+
+       // TODO: Remember to ensure it doesn't get restarted by watch
+       // dir, etc. Set ignore commands, or something.
+
+       "group.insert = seeding,seeding\n"
+
        "set_name = \"$cat=$system.hostname=,:,$system.pid=\"\n"
 
        // Currently not doing any sorting on main.
@@ -187,51 +238,42 @@ main(int argc, char** argv) {
        "view_filter = active,false=\n"
 
        "view_add = started\n"
-       "view_filter = started,d.get_state=\n"
-       "view.event_added = started,scheduler.simple.added=\n"
-       "view.event_removed = started,scheduler.simple.removed=\n"
+       "view_filter = started,false=\n"
+       "view.event_added   = started,\"view.set_not_visible=stopped ;d.set_state=1 ;scheduler.simple.added=\"\n"
+       "view.event_removed = started,\"view.set_visible=stopped ;scheduler.simple.removed=\"\n"
 
        "view_add = stopped\n"
-       "view_filter = stopped,not=$d.get_state=\n"
+       "view_filter = stopped,false=\n"
+       "view.event_added   = stopped,\"view.set_not_visible=started ;d.set_state=0\"\n"
+       "view.event_removed = stopped,view.set_visible=started\n"
 
        "view_add = complete\n"
        "view_filter = complete,d.get_complete=\n"
-       "view_filter_on = complete,hash_done,finished\n"
+       "view_filter_on    = complete,event.download.hash_done,event.download.finished\n"
        "view_sort_new     = complete,less=d.get_state_changed=\n"
        "view_sort_current = complete,less=d.get_state_changed=\n"
 
        "view_add = incomplete\n"
        "view_filter = incomplete,not=$d.get_complete=\n"
-       "view_filter_on = incomplete,hash_done,finished\n"
+       "view_filter_on    = incomplete,event.download.hash_done,event.download.finished\n"
        "view_sort_new     = incomplete,less=d.get_state_changed=\n"
        "view_sort_current = incomplete,less=d.get_state_changed=\n"
 
        // The hashing view does not include stopped torrents.
        "view_add = hashing\n"
        "view_filter = hashing,d.get_hashing=\n"
-       "view_filter_on = hashing,hash_queued,hash_removed,hash_done\n"
+       "view_filter_on = hashing,event.download.hash_queued,event.download.hash_removed,event.download.hash_done\n"
 //        "view_sort_new     = hashing,less=d.get_state_changed=\n"
 //        "view_sort_current = hashing,less=d.get_state_changed=\n"
 
        "view_add = seeding\n"
        "view_filter = seeding,\"and=d.get_state=,d.get_complete=\"\n"
-       "view_filter_on = seeding,start,stop\n"
+       "view_filter_on    = seeding,event.download.resumed,event.download.paused,event.download.finished\n"
        "view_sort_new     = seeding,less=d.get_state_changed=\n"
        "view_sort_current = seeding,less=d.get_state_changed=\n"
 
-       // Changing these will bork the (non-existant) scheduler.
-       "view_add = scheduler\n"
-//        "view_sort_new     = scheduler,less=d.get_state_changed=\n"
-//        "view_sort_current = scheduler,less=d.get_state_changed=\n"
-
-       //    "schedule = scheduler,10,10,download_scheduler=\n"
-
        "schedule = view_main,10,10,\"view_sort=main,20\"\n"
        "schedule = view_name,10,10,\"view_sort=name,20\"\n"
-       //     "schedule = view_started,10,10,view_sort=started,5\n"
-       //     "schedule = view_stopped,10,10,view_sort=stopped,5\n"
-       //     "schedule = view_complete,10,10,view_sort=complete,5\n"
-       //     "schedule = view_incomplete,10,10,view_sort=incomplete,5\n"
 
        "schedule = session_save,1800,1800,session_save=\n"
        "schedule = low_diskspace,5,60,close_low_diskspace=500M\n"

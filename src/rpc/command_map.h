@@ -62,10 +62,10 @@ struct command_map_data_type {
 
   int                 target() const { return m_target; }
 
-  Command*      m_variable;
+  Command*            m_variable;
 
   union {
-    Command::generic_slot  m_genericSlot;
+    Command::cleaned_slot  m_genericSlot;
     Command::any_slot      m_anySlot;
     Command::download_slot m_downloadSlot;
     Command::file_slot     m_fileSlot;
@@ -100,13 +100,18 @@ public:
   using base_type::find;
 
   static const int flag_dont_delete   = 0x1;
-  static const int flag_public_xmlrpc = 0x2;
+  static const int flag_delete_key    = 0x2;
+  static const int flag_public_xmlrpc = 0x4;
+  static const int flag_no_target     = 0x8;
+  static const int flag_modifiable    = 0x10;
 
   CommandMap() {}
   ~CommandMap();
 
   bool                has(const char* key) const        { return base_type::find(key) != base_type::end(); }
   bool                has(const std::string& key) const { return has(key.c_str()); }
+
+  bool                is_modifiable(const_iterator itr) { return itr != end() && (itr->second.m_flags & flag_modifiable); }
 
   iterator            insert(key_type key, Command* variable, int flags, const char* parm, const char* doc);
 
@@ -116,10 +121,15 @@ public:
     iterator itr = insert(key, variable, flags, parm, doc);
 
     itr->second.m_target      = target_type_id<T>::value; 
-    itr->second.m_genericSlot = (Command::generic_slot)targetSlot;
+    itr->second.m_genericSlot = (Command::cleaned_slot)targetSlot;
   }
 
   void                insert(key_type key, const command_map_data_type src);
+  void                erase(iterator itr);
+
+  const mapped_type   call(key_type key, const mapped_type& args = mapped_type());
+  const mapped_type   call(key_type key, target_type target, const mapped_type& args = mapped_type()) { return call_command(key, args, target); }
+  const mapped_type   call_catch(key_type key, target_type target, const mapped_type& args = mapped_type(), const char* err = "Command failed: ");
 
   const mapped_type   call_command  (key_type key,       const mapped_type& arg, target_type target = target_type((int)Command::target_generic, NULL));
   const mapped_type   call_command  (const_iterator itr, const mapped_type& arg, target_type target = target_type((int)Command::target_generic, NULL));
@@ -146,6 +156,31 @@ inline target_type make_target(T target) {
 template <typename T>
 inline target_type make_target_pair(T target1, T target2) {
   return target_type((int)target_type_id<T, T>::value, target1, target2);
+}
+
+// TODO: Helper-functions that really should be in the
+// torrent/object.h header.
+
+inline torrent::Object
+create_object_list(const torrent::Object& o1, const torrent::Object& o2) {
+  torrent::Object tmp = torrent::Object::create_list();
+  tmp.as_list().push_back(o1);
+  tmp.as_list().push_back(o2);
+  return tmp;
+}
+
+inline torrent::Object
+create_object_list(const torrent::Object& o1, const torrent::Object& o2, const torrent::Object& o3) {
+  torrent::Object tmp = torrent::Object::create_list();
+  tmp.as_list().push_back(o1);
+  tmp.as_list().push_back(o2);
+  tmp.as_list().push_back(o3);
+  return tmp;
+}
+
+inline const CommandMap::mapped_type
+CommandMap::call(key_type key, const mapped_type& args) {
+  return call_command(key, args, make_target());
 }
 
 }

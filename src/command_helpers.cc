@@ -49,6 +49,8 @@ rpc::CommandSlot<void>    commandSlots[COMMAND_SLOTS_SIZE];
 rpc::CommandSlot<void>*   commandSlotsItr = commandSlots;
 rpc::CommandVariable      commandVariables[COMMAND_VARIABLES_SIZE];
 rpc::CommandVariable*     commandVariablesItr = commandVariables;
+rpc::CommandObjectPtr     commandObjectPtrs[COMMAND_OBJECT_PTR_SIZE];
+rpc::CommandObjectPtr*    commandObjectPtrsItr = commandObjectPtrs;
 rpc::CommandSlot<core::Download*>             commandDownloadSlots[COMMAND_DOWNLOAD_SLOTS_SIZE];
 rpc::CommandSlot<core::Download*>*            commandDownloadSlotsItr = commandDownloadSlots;
 rpc::CommandSlot<torrent::File*>              commandFileSlots[COMMAND_FILE_SLOTS_SIZE];
@@ -62,6 +64,8 @@ rpc::CommandSlot<torrent::Tracker*>*          commandTrackerSlotsItr = commandTr
 rpc::CommandSlot<rpc::target_type>            commandAnySlots[COMMAND_ANY_SLOTS_SIZE];
 rpc::CommandSlot<rpc::target_type>*           commandAnySlotsItr = commandAnySlots;
 
+void initialize_command_object();
+void initialize_command_dynamic();
 void initialize_command_download();
 void initialize_command_events();
 void initialize_command_file();
@@ -74,6 +78,8 @@ void initialize_command_ui();
 
 void
 initialize_commands() {
+  initialize_command_object();
+  initialize_command_dynamic();
   initialize_command_events();
   initialize_command_network();
   initialize_command_local();
@@ -87,6 +93,7 @@ initialize_commands() {
 #ifdef ADDING_COMMANDS 
   if (commandSlotsItr > commandSlots + COMMAND_SLOTS_SIZE ||
       commandVariablesItr > commandVariables + COMMAND_VARIABLES_SIZE ||
+      commandObjectPtrsItr > commandObjectPtrs + COMMAND_OBJECT_PTR_SIZE ||
       commandDownloadSlotsItr > commandDownloadSlots + COMMAND_DOWNLOAD_SLOTS_SIZE ||
       commandFileSlotsItr > commandFileSlots + COMMAND_FILE_SLOTS_SIZE ||
       commandFileItrSlotsItr > commandFileItrSlots + COMMAND_FILE_ITR_SLOTS_SIZE ||
@@ -96,6 +103,7 @@ initialize_commands() {
 #else
   if (commandSlotsItr != commandSlots + COMMAND_SLOTS_SIZE ||
       commandVariablesItr != commandVariables + COMMAND_VARIABLES_SIZE ||
+      commandObjectPtrsItr != commandObjectPtrs + COMMAND_OBJECT_PTR_SIZE ||
       commandDownloadSlotsItr != commandDownloadSlots + COMMAND_DOWNLOAD_SLOTS_SIZE ||
       commandFileSlotsItr != commandFileSlots + COMMAND_FILE_SLOTS_SIZE ||
       commandFileItrSlotsItr != commandFileItrSlots + COMMAND_FILE_ITR_SLOTS_SIZE ||
@@ -108,7 +116,7 @@ initialize_commands() {
 
 void
 add_variable(const char* getKey, const char* setKey, const char* defaultSetKey,
-             rpc::Command::generic_slot getSlot, rpc::Command::generic_slot setSlot,
+             rpc::Command::cleaned_slot getSlot, rpc::Command::cleaned_slot setSlot,
              const torrent::Object& defaultObject) {
   rpc::CommandVariable* variable = commandVariablesItr++;
   variable->set_variable(defaultObject);

@@ -59,7 +59,7 @@
 #include "command_helpers.h"
 
 torrent::Object
-apply_on_state_change(core::DownloadList::slot_map* slotMap, const torrent::Object& rawArgs) {
+apply_on_state_change(const char* name, const torrent::Object& rawArgs) {
   const torrent::Object::list_type& args = rawArgs.as_list();
 
   if (args.size() == 0 || args.size() > 2)
@@ -76,59 +76,69 @@ apply_on_state_change(core::DownloadList::slot_map* slotMap, const torrent::Obje
   std::string key = rawKey[0] != '_' ? ("1_state_" + rawKey) : rawKey.substr(1);
 
   if (args.size() == 1)
-    slotMap->erase(key);
+    rpc::commands.call("system.method.set_key", rpc::make_target(), rpc::create_object_list(name, key));
   else
-    (*slotMap)[key] = args.back().as_string();
+    rpc::commands.call("system.method.set_key", rpc::make_target(), rpc::create_object_list(name, key, args.back()));
+
+  // Deprecated notice, remove this function in the next minor
+  // version.
+  static bool notify = true;
+
+  if (notify) {
+    control->core()->push_log("Deprecated on_* commands, use 'system.method.set_key = event.download.{inserted, erased, ...}, <key>, <command>' instead.");
+    notify = false;
+  }
 
   return torrent::Object();
 }
 
 torrent::Object
-apply_on_ratio(int action, const torrent::Object& rawArgs) {
-  const torrent::Object::list_type& args = rawArgs.as_list();
+apply_on_ratio(const torrent::Object& rawArgs) {
+  const std::string& groupName = rawArgs.as_string();
 
-  if (args.empty())
-    throw torrent::input_error("Too few arguments.");
+  char buffer[32 + groupName.size()];
+  sprintf(buffer, "group.%s.view", groupName.c_str());
 
-  torrent::Object::list_const_iterator argItr = args.begin();
+  core::ViewManager::iterator viewItr = control->view_manager()->find(rpc::commands.call(buffer, rpc::make_target()).as_string());
+
+  if (viewItr == control->view_manager()->end())
+    throw torrent::input_error("Could not find view.");
+
+  char* bufferStart = buffer + sprintf(buffer, "group.%s.ratio.", groupName.c_str());
 
   // first argument:  minimum ratio to reach
   // second argument: minimum upload amount to reach [optional]
   // third argument:  maximum ratio to reach [optional]
-  int64_t minRatio  = rpc::convert_to_value(*argItr++);
-  int64_t minUpload = argItr != args.end() ? rpc::convert_to_value(*argItr++) : 0;
-  int64_t maxRatio  = argItr != args.end() ? rpc::convert_to_value(*argItr++) : 0;
+  std::strcpy(bufferStart, "min");
+  int64_t minRatio  = rpc::commands.call(buffer, rpc::make_target()).as_value();
+  std::strcpy(bufferStart, "max");
+  int64_t maxRatio  = rpc::commands.call(buffer, rpc::make_target()).as_value();
+  std::strcpy(bufferStart, "upload");
+  int64_t minUpload = rpc::commands.call(buffer, rpc::make_target()).as_value();
 
-  core::DownloadList* downloadList = control->core()->download_list();
+  std::vector<core::Download*> downloads;
 
-  for  (core::Manager::DListItr itr = downloadList->begin();
-        (itr = std::find_if(itr, downloadList->end(), std::mem_fun(&core::Download::is_seeding))) != downloadList->end(); ) {
-    core::Download* current = *itr++;
+  for  (core::View::iterator itr = (*viewItr)->begin_visible(), last = (*viewItr)->end_visible(); itr != last; itr++) {
+    if (!(*itr)->is_seeding() || rpc::call_command_value("d.get_ignore_commands", rpc::make_target(*itr)) != 0)
+      continue;
 
-    int64_t totalDone   = current->download()->bytes_done();
-    int64_t totalUpload = current->download()->up_rate()->total();
+    //    rpc::parse_command_single(rpc::make_target(*itr), "print={Checked ratio of download.}");
+
+    int64_t totalDone   = (*itr)->download()->bytes_done();
+    int64_t totalUpload = (*itr)->download()->up_rate()->total();
 
     if (!(totalUpload >= minUpload && totalUpload * 100 >= totalDone * minRatio) &&
         !(maxRatio > 0 && totalUpload * 100 > totalDone * maxRatio))
       continue;
 
-    bool success = true;
+    downloads.push_back(*itr);
+  }
 
-    switch (action) {
-//     case core::DownloadList::SLOTS_CLOSE: success = downloadList->close_try(current); break;
-//     case core::DownloadList::SLOTS_STOP:  success = downloadList->stop_try(current); break;
-    case core::DownloadList::SLOTS_CLOSE: rpc::parse_command_single(rpc::make_target(current), "d.try_close="); break;
-    case core::DownloadList::SLOTS_STOP:  rpc::parse_command_single(rpc::make_target(current), "d.try_stop="); break;
-    default: success = false; break;
-    }
+  std::strcpy(bufferStart, "command");
 
-    if (!success)
-      continue;
-
-    rpc::call_command("d.set_ignore_commands", (int64_t)1, rpc::make_target(current));
-
-    for (torrent::Object::list_const_iterator itr2 = argItr; itr2 != args.end(); itr2++)
-      rpc::parse_command_object(rpc::make_target(current), *itr2);
+  for (std::vector<core::Download*>::iterator itr = downloads.begin(), last = downloads.end(); itr != last; itr++) {
+    //    rpc::commands.call("print", rpc::make_target(*itr), "Calling ratio command.");
+    rpc::commands.call_catch(buffer, rpc::make_target(*itr), torrent::Object(), "Ratio reached, but command failed: ");
   }
 
   return torrent::Object();
@@ -339,36 +349,25 @@ d_multicall(const torrent::Object& rawArgs) {
   return resultRaw;
 }
 
-torrent::Object
-cmd_call(const char* cmd, rpc::target_type target, const torrent::Object& rawArgs) {
-  rpc::parse_command_multiple(target, cmd);
-
-  return torrent::Object();
-}
-
-
 void
 initialize_command_events() {
-  core::DownloadList* downloadList = control->core()->download_list();
-
   ADD_VARIABLE_BOOL("check_hash", true);
 
   ADD_VARIABLE_BOOL("session_lock", true);
   ADD_VARIABLE_BOOL("session_on_completion", true);
 
-  ADD_COMMAND_LIST("on_insert",       rak::bind_ptr_fn(&apply_on_state_change, &downloadList->slot_map_insert()));
-  ADD_COMMAND_LIST("on_erase",        rak::bind_ptr_fn(&apply_on_state_change, &downloadList->slot_map_erase()));
-  ADD_COMMAND_LIST("on_open",         rak::bind_ptr_fn(&apply_on_state_change, &downloadList->slot_map_open()));
-  ADD_COMMAND_LIST("on_close",        rak::bind_ptr_fn(&apply_on_state_change, &downloadList->slot_map_close()));
-  ADD_COMMAND_LIST("on_start",        rak::bind_ptr_fn(&apply_on_state_change, &downloadList->slot_map_start()));
-  ADD_COMMAND_LIST("on_stop",         rak::bind_ptr_fn(&apply_on_state_change, &downloadList->slot_map_stop()));
-  ADD_COMMAND_LIST("on_hash_queued",  rak::bind_ptr_fn(&apply_on_state_change, &downloadList->slot_map_hash_queued()));
-  ADD_COMMAND_LIST("on_hash_removed", rak::bind_ptr_fn(&apply_on_state_change, &downloadList->slot_map_hash_removed()));
-  ADD_COMMAND_LIST("on_hash_done",    rak::bind_ptr_fn(&apply_on_state_change, &downloadList->slot_map_hash_done()));
-  ADD_COMMAND_LIST("on_finished",     rak::bind_ptr_fn(&apply_on_state_change, &downloadList->slot_map_finished()));
+  // Deprecated.
+  ADD_COMMAND_LIST("on_insert",       rak::bind_ptr_fn(&apply_on_state_change, "event.download.inserted"));
+  ADD_COMMAND_LIST("on_erase" ,       rak::bind_ptr_fn(&apply_on_state_change, "event.download.erased"));
+  ADD_COMMAND_LIST("on_open",         rak::bind_ptr_fn(&apply_on_state_change, "event.download.opened"));
+  ADD_COMMAND_LIST("on_close",        rak::bind_ptr_fn(&apply_on_state_change, "event.download.closed"));
+  ADD_COMMAND_LIST("on_start",        rak::bind_ptr_fn(&apply_on_state_change, "event.download.resumed"));
+  ADD_COMMAND_LIST("on_stop",         rak::bind_ptr_fn(&apply_on_state_change, "event.download.paused"));
+  ADD_COMMAND_LIST("on_hash_queued",  rak::bind_ptr_fn(&apply_on_state_change, "event.download.hash_queued"));
+  ADD_COMMAND_LIST("on_hash_removed", rak::bind_ptr_fn(&apply_on_state_change, "event.download.hash_removed"));
+  ADD_COMMAND_LIST("on_finished",     rak::bind_ptr_fn(&apply_on_state_change, "event.download.finished"));
 
-  ADD_COMMAND_LIST("stop_on_ratio",   rak::bind_ptr_fn(&apply_on_ratio, (int)core::DownloadList::SLOTS_STOP));
-  ADD_COMMAND_LIST("close_on_ratio",  rak::bind_ptr_fn(&apply_on_ratio, (int)core::DownloadList::SLOTS_CLOSE));
+  ADD_COMMAND_STRING("on_ratio",      rak::ptr_fn(&apply_on_ratio));
 
   ADD_COMMAND_VOID("start_tied",      &apply_start_tied);
   ADD_COMMAND_VOID("stop_untied",     &apply_stop_untied);
