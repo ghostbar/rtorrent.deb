@@ -1,3 +1,9 @@
+rtorrent (0.8.3-1) experimental; urgency=low
+
+  * New upstream release
+
+ -- Jose Luis Rivas <ghostbar38@gmail.com>  Wed, 19 Nov 2008 09:15:59 -0430
+
 rtorrent (0.8.2-1) experimental; urgency=low
 
   * New upstream release.
