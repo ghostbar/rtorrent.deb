@@ -98,7 +98,6 @@ DownloadList::activate(display::Frame* frame, bool focus) {
   m_frame = frame;
 
   control->input()->push_back(&m_bindings);
-  control->core()->download_list()->slot_map_erase()["0_download_list"] = "ui.unfocus_download=";
 
   activate_display(DISPLAY_DOWNLOAD_LIST);
 }
@@ -119,6 +118,11 @@ DownloadList::disable() {
 core::View*
 DownloadList::current_view() {
   return dynamic_cast<ElementDownloadList*>(m_uiArray[DISPLAY_DOWNLOAD_LIST])->view();
+}
+
+void
+DownloadList::set_current_view(const std::string& name) {
+  return dynamic_cast<ElementDownloadList*>(m_uiArray[DISPLAY_DOWNLOAD_LIST])->receive_change_view(name);
 }
 
 // This should also do focus_next() or something.

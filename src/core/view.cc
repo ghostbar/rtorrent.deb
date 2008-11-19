@@ -116,9 +116,7 @@ View::~View() {
   if (m_name.empty())
     return;
 
-  std::for_each(control->core()->download_list()->slot_map_begin(), control->core()->download_list()->slot_map_end(),
-                rak::bind2nd(std::ptr_fun(&DownloadList::erase_key), "0_view_" + m_name));
-
+  clear_filter_on();
   priority_queue_erase(&taskScheduler, &m_delayChanged);
 }
 
@@ -130,11 +128,7 @@ View::initialize(const std::string& name) {
   if (name.empty())
     throw torrent::internal_error("View::initialize(...) called with an empty name.");
 
-  std::string key = "0_view_" + name;
   core::DownloadList* dlist = control->core()->download_list();
-
-  if (dlist->has_slot_insert(key) || dlist->has_slot_erase(key))
-    throw torrent::internal_error("View::initialize(...) duplicate key name found in DownloadList.");
 
   m_name = name;
 
@@ -295,19 +289,20 @@ View::filter_download(core::Download* download) {
 }
 
 void
-View::set_filter_on(int event) {
-  if (event == DownloadList::SLOTS_INSERT || event == DownloadList::SLOTS_ERASE || event >= DownloadList::SLOTS_MAX_SIZE)
-    throw torrent::internal_error("View::filter_on(...) invalid event.");
+View::set_filter_on_event(const std::string& event) {
+  if (std::find(m_events.begin(), m_events.end(), event) != m_events.end())
+    return;
 
-  control->core()->download_list()->slots(event)["0_view_" + m_name] = "view.filter_download=" + m_name;
+  rpc::commands.call_catch("system.method.set_key", rpc::make_target(), rpc::create_object_list(event, "!view_" + m_name, "view.filter_download=" + m_name));
+  m_events.push_back(event);
 }
 
 void
 View::clear_filter_on() {
   // Don't clear insert and erase as these are required to keep the
   // View up-to-date with the available downloads.
-  std::for_each(control->core()->download_list()->slot_map_begin() + DownloadList::SLOTS_OPEN, control->core()->download_list()->slot_map_end(),
-                rak::bind2nd(std::ptr_fun(&DownloadList::erase_key), "0_view_" + m_name));
+  for (event_list_type::const_iterator itr = m_events.begin(); itr != m_events.end(); itr++)
+    rpc::commands.call_catch("system.method.set_key", rpc::make_target(), rpc::create_object_list(*itr, "!view_" + m_name));
 }
 
 inline void

@@ -34,47 +34,52 @@
 //           Skomakerveien 33
 //           3185 Skoppum, NORWAY
 
-#ifndef RTORRENT_CORE_SCHEDULER_H
-#define RTORRENT_CORE_SCHEDULER_H
+#ifndef RTORRENT_RPC_COMMAND_FUNCTION_H
+#define RTORRENT_RPC_COMMAND_FUNCTION_H
 
-#include <map>
 #include <string>
+#include <vector>
+#include <limits>
 #include <inttypes.h>
+#include <torrent/object.h>
 
-#include "view.h"
+#include "command.h"
 
-namespace core {
+namespace rpc {
 
-class DownloadList;
-class View;
-
-class Scheduler {
+class CommandFunction : public Command {
 public:
-  typedef uint32_t size_type;
+  CommandFunction(const std::string& cmd = std::string()) : m_command(cmd) {}
+  
+  const std::string&  command() const                     { return m_command; }
+  void                set_command(const std::string& cmd) { m_command = cmd; }
 
-  static const size_type unlimited = ~size_type();
-
-  Scheduler(DownloadList* dl);
-  ~Scheduler();
-
-  void                set_view(View* view);
-
-  size_type           max_active() const          { return m_maxActive; }
-  void                set_max_active(size_type v) { m_maxActive = v; }
-
-  size_type           cycle() const               { return m_cycle; }
-  void                set_cycle(size_type v)      { m_cycle = v; }
-
-  size_type           active() const;
-
-  void                update();
+  static const torrent::Object call(Command* rawCommand, target_type target, const torrent::Object& args);
 
 private:
-  View*               m_view;
-  DownloadList*       m_downloadList;
+  // TODO: Replace with a delete-me flag and const char*.
+  std::string         m_command;
+};
 
-  size_type           m_maxActive;
-  size_type           m_cycle;
+class CommandFunctionList : public Command,
+                            private std::vector<std::pair<std::string, std::string> > {
+public:
+  typedef std::vector<std::pair<std::string, std::string> > base_type;
+
+  using Command::value_type;
+  using base_type::iterator;
+  using base_type::const_iterator;
+  using base_type::begin;
+  using base_type::end;
+
+  CommandFunctionList() {}
+  
+  const_iterator      find(const char* key);
+
+  void                insert(const std::string& key, const std::string& cmd);
+  void                erase(const std::string& key);
+
+  static const torrent::Object call(Command* rawCommand, target_type target, const torrent::Object& args);
 };
 
 }

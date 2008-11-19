@@ -53,8 +53,8 @@ am_libsub_core_a_OBJECTS = curl_get.$(OBJEXT) curl_socket.$(OBJEXT) \
 	download_store.$(OBJEXT) http_queue.$(OBJEXT) log.$(OBJEXT) \
 	manager.$(OBJEXT) poll_manager.$(OBJEXT) \
 	poll_manager_epoll.$(OBJEXT) poll_manager_kqueue.$(OBJEXT) \
-	poll_manager_select.$(OBJEXT) scheduler.$(OBJEXT) \
-	view.$(OBJEXT) view_manager.$(OBJEXT)
+	poll_manager_select.$(OBJEXT) view.$(OBJEXT) \
+	view_manager.$(OBJEXT)
 libsub_core_a_OBJECTS = $(am_libsub_core_a_OBJECTS)
 DEFAULT_INCLUDES = -I.@am__isrc@ -I$(top_builddir)
 depcomp = $(SHELL) $(top_srcdir)/depcomp
@@ -231,8 +231,6 @@ libsub_core_a_SOURCES = \
 	poll_manager_kqueue.h \
 	poll_manager_select.cc \
 	poll_manager_select.h \
-	scheduler.cc \
-	scheduler.h \
 	view.cc \
 	view.h \
 	view_manager.cc \
@@ -301,7 +299,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/poll_manager_epoll.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/poll_manager_kqueue.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/poll_manager_select.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/scheduler.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/view.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/view_manager.Po@am__quote@
 

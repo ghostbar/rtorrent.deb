@@ -37,71 +37,18 @@
 #include "config.h"
 
 #include <algorithm>
-#include <rak/functional.h>
-#include <torrent/exceptions.h>
 
-#include "download.h"
-#include "download_list.h"
-#include "scheduler.h"
-#include "view.h"
+#include "globals.h"
+#include "control.h"
+#include "command_helpers.h"
+#include "rpc/command_variable.h"
 
-namespace core {
+// torrent::Object
+// list_push_back(__UNUSED rpc::target_type target, const torrent::Object& rawArgs) {
 
-// Change to unlimited.
-Scheduler::Scheduler(DownloadList* dl) :
-  m_view(NULL),
-  m_downloadList(dl),
-
-  m_maxActive(2),
-  m_cycle(1) {
-}
-
-Scheduler::~Scheduler() {
-}
 
 void
-Scheduler::set_view(View* view) {
-  m_view = view;
-}
-
-Scheduler::size_type
-Scheduler::active() const {
-  return std::count_if(m_view->begin_visible(), m_view->end_visible(), std::mem_fun(&Download::is_active));
-}
-
-void
-Scheduler::update() {
-//   size_type curActive = active();
-  //  size_type curInactive = m_view->size() - curActive;
-
-  // Hmm... Perhaps we should use a more complex sorting thingie.
-//   m_view->sort();
-
-  // Just a hack for now, need to take into consideration how many
-  // inactive we can switch with.
-//   size_type target = m_maxActive - std::min(m_cycle, m_maxActive);
-
-//   for (View::iterator itr = m_view->begin_visible(), last = m_view->end_visible(); curActive > target; ++itr) {
-//     if (itr == last)
-//       throw torrent::internal_error("Scheduler::update() loop bork.");
-
-//     if ((*itr)->is_active()) {
-//       m_downloadList->pause(*itr);
-//       --curActive;
-//     }      
-//   }
-
-//   m_view->sort();
-
-//   for (View::iterator itr = m_view->begin_visible(), last = m_view->end_visible(); curActive < m_maxActive; ++itr) {
-//     if (itr == last)
-//       throw torrent::internal_error("Scheduler::update() loop bork.");
-
-//     if (!(*itr)->is_active()) {
-//       m_downloadList->start_try(*itr);
-//       ++curActive;
-//     }      
-//   }
-}
-
+initialize_command_object() {
+//   CMD_N       ("system.method.insert",    rak::ptr_fn(&system_method_insert));
+//   CMD_N_STRING("system.method.erase",     rak::ptr_fn(&system_method_erase));
 }

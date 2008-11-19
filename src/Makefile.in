@@ -48,9 +48,10 @@ am__installdirs = "$(DESTDIR)$(bindir)"
 binPROGRAMS_INSTALL = $(INSTALL_PROGRAM)
 PROGRAMS = $(bin_PROGRAMS)
 am_rtorrent_OBJECTS = command_download.$(OBJEXT) \
-	command_events.$(OBJEXT) command_file.$(OBJEXT) \
-	command_helpers.$(OBJEXT) command_local.$(OBJEXT) \
-	command_network.$(OBJEXT) command_peer.$(OBJEXT) \
+	command_dynamic.$(OBJEXT) command_events.$(OBJEXT) \
+	command_file.$(OBJEXT) command_helpers.$(OBJEXT) \
+	command_local.$(OBJEXT) command_network.$(OBJEXT) \
+	command_object.$(OBJEXT) command_peer.$(OBJEXT) \
 	command_tracker.$(OBJEXT) command_scheduler.$(OBJEXT) \
 	command_ui.$(OBJEXT) control.$(OBJEXT) globals.$(OBJEXT) \
 	main.$(OBJEXT) option_parser.$(OBJEXT) \
@@ -232,12 +233,14 @@ rtorrent_LDADD = \
 
 rtorrent_SOURCES = \
 	command_download.cc \
+	command_dynamic.cc \
 	command_events.cc \
 	command_file.cc \
 	command_helpers.cc \
 	command_helpers.h \
 	command_local.cc \
 	command_network.cc \
+	command_object.cc \
 	command_peer.cc \
 	command_tracker.cc \
 	command_scheduler.cc \
@@ -324,11 +327,13 @@ distclean-compile:
 	-rm -f *.tab.c
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/command_download.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/command_dynamic.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/command_events.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/command_file.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/command_helpers.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/command_local.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/command_network.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/command_object.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/command_peer.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/command_scheduler.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/command_tracker.Po@am__quote@
