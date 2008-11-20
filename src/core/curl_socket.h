@@ -1,5 +1,5 @@
 // rTorrent - BitTorrent client
-// Copyright (C) 2005-2007, Jari Sundell
+// Copyright (C) 2005-2008, Jari Sundell
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -34,40 +34,35 @@
 //           Skomakerveien 33
 //           3185 Skoppum, NORWAY
 
-#ifndef RTORRENT_CORE_POLL_MANAGER_H
-#define RTORRENT_CORE_POLL_MANAGER_H
+#ifndef RTORRENT_CORE_CURL_SOCKET_H
+#define RTORRENT_CORE_CURL_SOCKET_H
 
-#include <rak/timer.h>
-#include <sigc++/signal.h>
-#include <torrent/poll.h>
+#include <torrent/event.h>
 
-#include "curl_stack.h"
+#include "globals.h"
 
 namespace core {
 
-// CurlStack really should be somewhere else, but that won't happen
-// until they add an epoll friendly API.
+class CurlStack;
 
-class PollManager {
+class CurlSocket : public torrent::Event {
 public:
-  typedef sigc::signal0<void> Signal;
+  CurlSocket(int fd, CurlStack* stack) : m_stack(stack) { m_fileDesc = fd; }
+  ~CurlSocket();
 
-  PollManager(torrent::Poll* poll);
-  virtual ~PollManager();
+  void               close();
 
-  unsigned int        get_open_max() const         { return m_poll->open_max(); }
+  static int         receive_socket(void* easy_handle, curl_socket_t fd, int what, void* userp, void* socketp);
 
-  torrent::Poll*      get_torrent_poll()           { return m_poll; }
+private:
+  CurlSocket(const CurlSocket&);
+  void operator = (const CurlSocket&);
 
-  virtual void        poll(rak::timer timeout) = 0;
+  virtual void       event_read();
+  virtual void       event_write();
+  virtual void       event_error();
 
-protected:
-  PollManager(const PollManager&);
-  void operator = (const PollManager&);
-
-  void                check_error();
-
-  torrent::Poll*      m_poll;
+  CurlStack*     m_stack;
 };
 
 }
