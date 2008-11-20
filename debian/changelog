@@ -1,31 +1,14 @@
-rtorrent (0.8.4-1~b1) experimental; urgency=low
-
-  * New upstream release
-  * Updated B-P on libtorrent-dev to 0.12.4
-
- -- Jose Luis Rivas <ghostbar38@gmail.com>  Wed, 19 Nov 2008 14:27:01 -0430
-
-rtorrent (0.8.3-1~b1) experimental; urgency=low
-
-  * New upstream release
-  * Removed Arnaud Andesi from Uploaders.
-  * Bumped to 3.8.0
-  * Removed XS- from Vcs fields and updated these fields.
-  * Deleted patches, now are supplied from upstream.
-  * Refreshed debian/copyright
-
- -- Jose Luis Rivas <ghostbar38@gmail.com>  Wed, 19 Nov 2008 09:15:59 -0430
-
-rtorrent (0.8.2-1) experimental; urgency=low
+rtorrent (0.8.3-1) unstable; urgency=low
 
   * New upstream release.
-  * debian/patches/02_offbyone-xmlrpc_479807.patch:
-   + Fixed already upstream.
-  * debian/patches/01_rtorrent-gcc43.patch:
-   + This is fact does work perfectly, deleted old version for fixing build
-   with gcc4.3, replaced by this one.
+  * Removed Arnaud Andesi from Uploaders.
+  * Bumped to 3.8.0.
+  * Removed XS- from Vcs fields and updated these fields.
+  * Deleted patches, now are supplied from upstream.
+  * Refreshed debian/copyright.
+  * Fix for gcc>= 4.3 are applied from upstream (Closes: #504906).
 
- -- Jose Luis Rivas <ghostbar38@gmail.com>  Thu, 08 May 2008 23:03:55 -0430
+ -- Jose Luis Rivas <ghostbar38@gmail.com>  Wed, 19 Nov 2008 09:15:59 -0430
 
 rtorrent (0.7.9-2) unstable; urgency=low
 
