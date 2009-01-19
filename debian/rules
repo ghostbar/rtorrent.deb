@@ -7,4 +7,5 @@ include /usr/share/cdbs/1/class/autotools.mk
 #include /usr/share/cdbs/1/rules/simple-patchsys.mk
 
 DEB_OPT_FLAG = -fno-strict-aliasing
+DEB_COMPRESS_EXCLUDE = .py
 DEB_CONFIGURE_EXTRA_FLAGS += --with-xmlrpc-c
