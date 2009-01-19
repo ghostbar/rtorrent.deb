@@ -3,6 +3,7 @@ rtorrent (0.8.4-2) UNRELEASED; urgency=low
   * Format of some session files incompatibly changed in 0.8.x. Mention this
     in NEWS.Debian, and provide a script from the rssdler project that can
     convert those session files from the old format to the new format.
+  * Update changelog.gz symlink to point to libtorrent11 and not libtorrent10.
 
  -- Adeodato Simó <dato@net.com.org.es>  Mon, 19 Jan 2009 18:05:19 +0100
 
