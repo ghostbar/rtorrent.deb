@@ -1,9 +1,14 @@
 #!/usr/bin/make -f
 
 CPPFLAGS=-I/usr/include/ncursesw
+CFLAGS=-Wextra
+CXXFLAGS=-Wextra
+#LDFLAGS=-Wl,--as-needed
 
 include /usr/share/cdbs/1/rules/debhelper.mk
 include /usr/share/cdbs/1/class/autotools.mk
+#include /usr/share/cdbs/1/rules/simple-patchsys.mk
 
 DEB_OPT_FLAG = -fno-strict-aliasing
+DEB_COMPRESS_EXCLUDE = .py
 DEB_CONFIGURE_EXTRA_FLAGS += --with-xmlrpc-c

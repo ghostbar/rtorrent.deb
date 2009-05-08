@@ -1,14 +1,69 @@
-rtorrent (0.8.3-1) unstable; urgency=low
+rtorrent (0.8.4-3) unstable; urgency=low
 
-  * New upstream release.
+  * debian/changelog:
+    + prepare an upload meant to unstable.
+  * debian/copyright:
+    + fix lintian warning regarding versionless link to GPL.
+  * debian/control:
+    + add myself as an uploader (discussed with Jose and Adeodato).
+    + word-wrap the build dependencies field (for more legibility).
+    + change XS-Vcs-* to Vcs-* headers.
+    + add a suggests field with screen or dtach utilities.
+    + include information about DHT in the long description.
+    + include information about PEX in the long description.
+    + include information about superseeding in the long description.
+    + reword the long description to be less "marketese" and more
+      digestible for both experienced and new users.
+    + drop versioned depends on libxmlrpc-c3-dev (stable has it).
+    + include comment at the top of the file (policy 3.8.1 allows it).
+    + update Standards-Version to 3.8.1.
+  * debian/rules:
+    + add commented --as-needed linker option to reduce library dependencies.
+    + add -Wextra to produce more warnings and communicate to upstream.
+    + TODO: fix upstream makefile for generation of manpages from docbook.
+
+ -- Rogério Brito <rbrito@ime.usp.br>  Thu, 07 May 2009 04:33:42 -0300
+
+rtorrent (0.8.4-2) experimental; urgency=low
+
+  * Collab-Maint upload (acked by Jose Luis).
+
+  * Format of some session files incompatibly changed in 0.8.x. Mention this
+    in NEWS.Debian, and provide a script from the rssdler project that can
+    convert those session files from the old format to the new format.
+
+  * Update changelog.gz symlink to point to libtorrent11 and not libtorrent10.
+
+ -- Adeodato Simó <dato@net.com.org.es>  Fri, 23 Jan 2009 11:26:32 +0100
+
+rtorrent (0.8.4-1) experimental; urgency=low
+
+  * New upstream release
+  * Updated B-P on libtorrent-dev to 0.12.4
+
+ -- Jose Luis Rivas <ghostbar38@gmail.com>  Wed, 19 Nov 2008 23:03:55 -0430
+
+rtorrent (0.8.3-1~b1) experimental; urgency=low
+
+  * New upstream release
   * Removed Arnaud Andesi from Uploaders.
-  * Bumped to 3.8.0.
+  * Bumped to 3.8.0
   * Removed XS- from Vcs fields and updated these fields.
   * Deleted patches, now are supplied from upstream.
-  * Refreshed debian/copyright.
-  * Fix for gcc>= 4.3 are applied from upstream (Closes: #504906).
+  * Refreshed debian/copyright
 
  -- Jose Luis Rivas <ghostbar38@gmail.com>  Wed, 19 Nov 2008 09:15:59 -0430
+
+rtorrent (0.8.2-1) experimental; urgency=low
+
+  * New upstream release.
+  * debian/patches/02_offbyone-xmlrpc_479807.patch:
+   + Fixed already upstream.
+  * debian/patches/01_rtorrent-gcc43.patch:
+   + This is fact does work perfectly, deleted old version for fixing build
+   with gcc4.3, replaced by this one.
+
+ -- Jose Luis Rivas <ghostbar38@gmail.com>  Thu, 08 May 2008 23:03:55 -0430
 
 rtorrent (0.7.9-2) unstable; urgency=low
 
