@@ -1,13 +1,16 @@
 rtorrent (0.8.4-3) unstable; urgency=low
 
+  [ Rogério Brito ]
   * debian/changelog:
     + prepare an upload meant to unstable.
   * debian/copyright:
     + fix lintian warning regarding versionless link to GPL.
   * debian/control:
     + add myself as an uploader (discussed with Jose and Adeodato).
+    + accept Dmitry to the team of maintainers.
     + word-wrap the build dependencies field (for more legibility).
     + change XS-Vcs-* to Vcs-* headers.
+    + shortened the VCS-Browser url.
     + add a suggests field with screen or dtach utilities.
     + include information about DHT in the long description.
     + include information about PEX in the long description.
@@ -21,14 +24,17 @@ rtorrent (0.8.4-3) unstable; urgency=low
     + add commented --as-needed linker option to reduce library dependencies.
     + add -Wextra to produce more warnings and communicate to upstream.
     + TODO: fix upstream makefile for generation of manpages from docbook.
-  [ unera ]
+  * debian/README.source:
+    + add it, since Dmitry is including patches and policy requires it.
+
+  [ Dmitry E. Oboukhov ]
   * debian/patches:
     + added fix-xmlrpc-utf8.patch to resolve the problem of generation
     incorrect XML, closes: #514527.
   * debian/rules:
-    + added include simple-patchsys.mk.
+    + uncommented include simple-patchsys.mk.
 
- -- Dmitry E. Oboukhov <unera@debian.org>  Fri, 08 May 2009 11:06:09 +0400
+ -- Rogério Brito <rbrito@ime.usp.br>  Fri, 08 May 2009 10:50:35 -0300
 
 rtorrent (0.8.4-2) experimental; urgency=low
 

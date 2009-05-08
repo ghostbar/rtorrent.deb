@@ -3,13 +3,14 @@ Source: rtorrent
 Section: net
 Priority: extra
 Maintainer: Jose Luis Rivas <ghostbar38@gmail.com>
-Uploaders: Rogério Brito <rbrito@ime.usp.br>
+Uploaders: Rogério Brito <rbrito@ime.usp.br>,
+	   Dmitry E. Oboukhov <unera@debian.org>
 Build-Depends: debhelper (>= 5), cdbs, libtorrent-dev (>=0.12.4),
 	       libsigc++-2.0-dev, libcurl4-openssl-dev, libncursesw5-dev,
 	       bc, libxmlrpc-c3-dev
 Standards-Version: 3.8.1
 Vcs-Git: git://git.debian.org/git/collab-maint/rtorrent.git
-Vcs-browser: http://git.debian.org/?p=collab-maint/rtorrent.git;a=summary
+Vcs-Browser: http://git.debian.org/?p=collab-maint/rtorrent.git
 Homepage: http://libtorrent.rakshasa.no/
 
 Package: rtorrent
