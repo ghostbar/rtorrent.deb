@@ -21,8 +21,14 @@ rtorrent (0.8.4-3) unstable; urgency=low
     + add commented --as-needed linker option to reduce library dependencies.
     + add -Wextra to produce more warnings and communicate to upstream.
     + TODO: fix upstream makefile for generation of manpages from docbook.
+  [ unera ]
+  * debian/patches:
+    + added fix-xmlrpc-utf8.patch to resolve the problem of generation
+    incorrect XML, closes: #514527.
+  * debian/rules:
+    + added include simple-patchsys.mk.
 
- -- Rogério Brito <rbrito@ime.usp.br>  Thu, 07 May 2009 04:33:42 -0300
+ -- Dmitry E. Oboukhov <unera@debian.org>  Fri, 08 May 2009 11:06:09 +0400
 
 rtorrent (0.8.4-2) experimental; urgency=low
 
