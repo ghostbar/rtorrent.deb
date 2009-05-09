@@ -1,10 +1,11 @@
 rtorrent (0.8.4+tit-1) unstable; urgency=low
 
-  * Use Tar-in-tar build system (+tit suffix).
+  * Use Tar-in-tar build system (+tit suffix), now we can rebuild rtorrent
+  as many times as it is needed. Diff.gz will be clean.
   * Fixed incorrect merge of previous upload (this version is really 0.8.4),
     closes: 527882.
 
- -- Dmitry E. Oboukhov <unera@debian.org>  Sat, 09 May 2009 19:58:49 +0400
+ -- Dmitry E. Oboukhov <unera@debian.org>  Sat, 09 May 2009 20:11:35 +0400
 
 rtorrent (0.8.4-3) unstable; urgency=low
 
