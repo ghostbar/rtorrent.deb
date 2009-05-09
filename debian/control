@@ -3,6 +3,7 @@ Source: rtorrent
 Section: net
 Priority: extra
 Maintainer: Jose Luis Rivas <ghostbar38@gmail.com>
+DM-Upload-Allowed: yes
 Uploaders: Rogério Brito <rbrito@ime.usp.br>,
 	   Dmitry E. Oboukhov <unera@debian.org>
 Build-Depends: debhelper (>= 5), cdbs, libtorrent-dev (>=0.12.4),
