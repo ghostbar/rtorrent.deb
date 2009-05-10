@@ -6,7 +6,7 @@ Maintainer: Jose Luis Rivas <ghostbar38@gmail.com>
 DM-Upload-Allowed: yes
 Uploaders: Rogério Brito <rbrito@ime.usp.br>,
 	   Dmitry E. Oboukhov <unera@debian.org>
-Build-Depends: debhelper (>= 5), cdbs, libtorrent-dev (>=0.12.4),
+Build-Depends: debhelper (>= 5), cdbs, libtorrent-dev (>= 0.12.4+tit),
 	       libsigc++-2.0-dev, libcurl4-openssl-dev, libncursesw5-dev,
 	       bc, libxmlrpc-c3-dev
 Standards-Version: 3.8.1
