@@ -1,3 +1,10 @@
+rtorrent (0.8.4+tit-3) unstable; urgency=low
+
+  * Fix "FTBFS with GCC 4.4": slightly modified patch based on Martin
+    Michlmayr's (Closes: #504906)
+
+ -- Rogério Brito <rbrito@ime.usp.br>  Fri, 15 May 2009 21:48:24 -0300
+
 rtorrent (0.8.4+tit-2) unstable; urgency=low
 
   * Fixed build-depends for correctly building on alpha, amd64, etc.
