@@ -2,9 +2,9 @@
 Source: rtorrent
 Section: net
 Priority: extra
-Maintainer: Jose Luis Rivas <ghostbar38@gmail.com>
+Maintainer: Rogério Brito <rbrito@ime.usp.br>
 DM-Upload-Allowed: yes
-Uploaders: Rogério Brito <rbrito@ime.usp.br>,
+Uploaders: Jose Luis Rivas <ghostbar38@gmail.com>,
 	   Dmitry E. Oboukhov <unera@debian.org>
 Build-Depends: debhelper (>= 5), cdbs, libtorrent-dev (>= 0.12.4+tit),
 	       libsigc++-2.0-dev, libcurl4-openssl-dev, libncursesw5-dev,
