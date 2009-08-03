@@ -6,6 +6,8 @@ rtorrent (0.8.5-1) unstable; urgency=low
 
   [ Rogério Brito ]
   * Update to unstable. Thanks to Dmitry.
+  * debian/control:
+    + update Standards-Version to 3.8.2 (no changes required).
 
  -- Rogério Brito <rbrito@ime.usp.br>  Mon, 03 Aug 2009 13:18:04 -0300
 
