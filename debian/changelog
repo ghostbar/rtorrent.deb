@@ -1,6 +1,7 @@
 rtorrent (0.8.5-2) unstable; urgency=low
 
   * Add patch to fix crash by SCGI, closes: 541487, thanks for jdrexler.
+  * Standards-Version was bumped to 3.8.3 (no changes required).
 
  -- Dmitry E. Oboukhov <unera@debian.org>  Sun, 16 Aug 2009 09:12:32 +0400
 
