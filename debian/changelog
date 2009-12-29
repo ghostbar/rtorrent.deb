@@ -1,3 +1,9 @@
+rtorrent (0.8.6-1) unstable; urgency=low
+
+  * New upstream stable version.
+
+ -- Dmitry E. Oboukhov <unera@debian.org>  Tue, 29 Dec 2009 16:30:17 +0300
+
 rtorrent (0.8.5-2) unstable; urgency=low
 
   * Add patch to fix crash by SCGI, closes: 541487, thanks for jdrexler.

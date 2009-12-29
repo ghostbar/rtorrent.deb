@@ -1,6 +1,6 @@
 #!/usr/bin/make -f
 
-DEB_TAR_SRCDIR=rtorrent-0.8.5
+DEB_TAR_SRCDIR=rtorrent-0.8.6
 
 DEB_INSTALL_EXAMPLES_rtorrent=build-tree/$(DEB_TAR_SRCDIR)/doc/rtorrent.rc
 
