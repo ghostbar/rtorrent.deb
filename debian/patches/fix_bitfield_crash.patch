@@ -1,4 +1,7 @@
-# Fix crash when trying to call d.get_bitfield on a closed download. Ticket #1825.
+Description: Fix crash when trying to call d.get_bitfield on a closed download.
+Origin: http://libtorrent.rakshasa.no/ticket/1825, upstream
+Author: Josef Drexler
+Last-Update: 2009-11-14
 Index: rtorrent/src/command_download.cc
 ===================================================================
 --- rtorrent/src/command_download.cc	(revision 1093)
