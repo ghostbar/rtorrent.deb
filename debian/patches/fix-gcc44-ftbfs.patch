@@ -1,5 +1,7 @@
-# Fix FTBFS with gcc 4.4.
-# Modified from a patch by Martin Michlmayr
+Description: Fix FTBFS with gcc 4.4.
+Origin: http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=504906
+Forwarded: no
+Last-Update: 2010-04-03
 --- a/src/display/utils.h
 +++ b/src/display/utils.h
 @@ -37,6 +37,7 @@
