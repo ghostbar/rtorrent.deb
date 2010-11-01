@@ -36,71 +36,48 @@
 
 #include "config.h"
 
-#include <algorithm>
-#include <rak/functional.h>
+#include <rak/file_stat.h>
+#include <rak/path.h>
 #include <torrent/exceptions.h>
 
-#include "download.h"
-#include "download_list.h"
-#include "scheduler.h"
-#include "view.h"
+#include "file_status_cache.h"
 
-namespace core {
+namespace utils {
 
-// Change to unlimited.
-Scheduler::Scheduler(DownloadList* dl) :
-  m_view(NULL),
-  m_downloadList(dl),
+bool
+FileStatusCache::insert(const std::string& path, int flags) {
+  rak::file_stat fs;
 
-  m_maxActive(2),
-  m_cycle(1) {
-}
+  // Should we expand somewhere else? Problem is it adds a lot of junk
+  // to the start of the paths added to the cache, causing more work
+  // during search, etc.
+  if (!fs.update(rak::path_expand(path)))
+    return false;
 
-Scheduler::~Scheduler() {
+  std::pair<iterator, bool> result = base_type::insert(value_type(path, file_status()));
+
+  // Return false if the file hasn't been modified since last time. We
+  // use 'equal to' instead of 'greater than' since the file might
+  // have been replaced by another file, and thus should be re-tried.
+  if (!result.second && result.first->second.m_mtime == (uint32_t)fs.modified_time())
+    return false;
+
+  result.first->second.m_flags = 0;
+  result.first->second.m_mtime = fs.modified_time();
+
+  return true;
 }
 
 void
-Scheduler::set_view(View* view) {
-  m_view = view;
-}
+FileStatusCache::prune() {
+  iterator itr = begin();
 
-Scheduler::size_type
-Scheduler::active() const {
-  return std::count_if(m_view->begin_visible(), m_view->end_visible(), std::mem_fun(&Download::is_active));
-}
+  while (itr != end()) {
+    rak::file_stat fs;
+    iterator tmp = itr++;
 
-void
-Scheduler::update() {
-  size_type curActive = active();
-  //  size_type curInactive = m_view->size() - curActive;
-
-  // Hmm... Perhaps we should use a more complex sorting thingie.
-  m_view->sort();
-
-  // Just a hack for now, need to take into consideration how many
-  // inactive we can switch with.
-  size_type target = m_maxActive - std::min(m_cycle, m_maxActive);
-
-  for (View::iterator itr = m_view->begin_visible(), last = m_view->end_visible(); curActive > target; ++itr) {
-    if (itr == last)
-      throw torrent::internal_error("Scheduler::update() loop bork.");
-
-    if ((*itr)->is_active()) {
-      m_downloadList->pause(*itr);
-      --curActive;
-    }      
-  }
-
-  m_view->sort();
-
-  for (View::iterator itr = m_view->begin_visible(), last = m_view->end_visible(); curActive < m_maxActive; ++itr) {
-    if (itr == last)
-      throw torrent::internal_error("Scheduler::update() loop bork.");
-
-    if (!(*itr)->is_active()) {
-      m_downloadList->start_try(*itr);
-      ++curActive;
-    }      
+    if (!fs.update(rak::path_expand(tmp->first)) || tmp->second.m_mtime != (uint32_t)fs.modified_time())
+      base_type::erase(tmp);
   }
 }
 

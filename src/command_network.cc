@@ -37,20 +37,23 @@
 #include "config.h"
 
 #include <functional>
+#include <cstdio>
 #include <rak/address_info.h>
-#include <rak/file_stat.h>
 #include <rak/path.h>
 #include <torrent/connection_manager.h>
+#include <torrent/dht_manager.h>
+#include <torrent/throttle.h>
 #include <torrent/tracker.h>
 #include <torrent/tracker_list.h>
 #include <torrent/torrent.h>
+#include <torrent/rate.h>
+#include <torrent/data/file_manager.h>
 
+#include "core/dht_manager.h"
 #include "core/download.h"
 #include "core/manager.h"
 #include "rpc/scgi.h"
 #include "ui/root.h"
-#include "rpc/command_slot.h"
-#include "rpc/command_variable.h"
 #include "rpc/parse.h"
 #include "rpc/parse_commands.h"
 
@@ -59,12 +62,121 @@
 #include "command_helpers.h"
 
 torrent::Object
-apply_encryption(const torrent::Object& rawArgs) {
-  const torrent::Object::list_type& args = rawArgs.as_list();
+apply_throttle(const torrent::Object::list_type& args, bool up) {
+  torrent::Object::list_const_iterator argItr = args.begin();
 
+  const std::string& name = argItr->as_string();
+  if (name.empty() || name == "NULL")
+    throw torrent::input_error("Invalid throttle name.");
+
+  if ((++argItr)->as_string().empty())
+    return torrent::Object();
+
+  int64_t rate;
+  rpc::parse_whole_value_nothrow(argItr->as_string().c_str(), &rate);
+
+  if (rate < 0)
+    throw torrent::input_error("Throttle rate must be non-negative.");
+
+  core::ThrottleMap::iterator itr = control->core()->throttles().find(name);
+  if (itr == control->core()->throttles().end())
+    itr = control->core()->throttles().insert(std::make_pair(name, torrent::ThrottlePair(NULL, NULL))).first;
+
+  torrent::Throttle*& throttle = up ? itr->second.first : itr->second.second;
+  if (rate != 0 && throttle == NULL)
+    throttle = (up ? torrent::up_throttle_global() : torrent::down_throttle_global())->create_slave();
+
+  if (throttle != NULL)
+    throttle->set_max_rate(rate * 1024);
+
+  return torrent::Object();
+}
+
+static const int throttle_info_up   = (1 << 0);
+static const int throttle_info_down = (1 << 1);
+static const int throttle_info_max  = (1 << 2);
+static const int throttle_info_rate = (1 << 3);
+
+torrent::Object
+retrieve_throttle_info(const torrent::Object::string_type& name, int flags) {
+  core::ThrottleMap::iterator itr = control->core()->throttles().find(name);
+  torrent::ThrottlePair throttles = itr == control->core()->throttles().end() ? torrent::ThrottlePair(NULL, NULL) : itr->second;
+  torrent::Throttle* throttle = flags & throttle_info_down ? throttles.second : throttles.first;
+  torrent::Throttle* global = flags & throttle_info_down ? torrent::down_throttle_global() : torrent::up_throttle_global();
+
+  if (throttle == NULL && name.empty())
+    throttle = global;
+
+  if (throttle == NULL)
+    return flags & throttle_info_rate ? (int64_t)0 : (int64_t)-1;
+  else if (!throttle->is_throttled() || !global->is_throttled())
+    return (int64_t)0;
+  else if (flags & throttle_info_rate)
+    return (int64_t)throttle->rate()->rate();
+  else
+    return (int64_t)throttle->max_rate();
+}
+
+std::pair<uint32_t, uint32_t>
+parse_address_range(const torrent::Object::list_type& args, torrent::Object::list_type::const_iterator itr) {
+  unsigned int prefixWidth, ret;
+  char dummy;
+  char host[1024];
+  rak::address_info* ai;
+
+  ret = std::sscanf(itr->as_string().c_str(), "%1023[^/]/%d%c", host, &prefixWidth, &dummy);
+  if (ret < 1 || rak::address_info::get_address_info(host, PF_INET, SOCK_STREAM, &ai) != 0)
+    throw torrent::input_error("Could not resolve host.");
+
+  uint32_t begin, end;
+  rak::socket_address sa;
+  sa.copy(*ai->address(), ai->length());
+  begin = end = sa.sa_inet()->address_h();
+  rak::address_info::free_address_info(ai);
+
+  if (ret == 2) {
+    if (++itr != args.end())
+      throw torrent::input_error("Cannot specify both network and range end.");
+
+    uint32_t netmask = std::numeric_limits<uint32_t>::max() << (32 - prefixWidth);
+    if (prefixWidth >= 32 || sa.sa_inet()->address_h() & ~netmask)
+      throw torrent::input_error("Invalid address/prefix.");
+
+    end = sa.sa_inet()->address_h() | ~netmask;
+
+  } else if (++itr != args.end()) {
+    if (rak::address_info::get_address_info(itr->as_string().c_str(), PF_INET, SOCK_STREAM, &ai) != 0)
+      throw torrent::input_error("Could not resolve host.");
+
+    sa.copy(*ai->address(), ai->length());
+    rak::address_info::free_address_info(ai);
+    end = sa.sa_inet()->address_h();
+  }
+
+  // convert to [begin, end) making sure the end doesn't overflow
+  // (this precludes 255.255.255.255 from ever matching, but that's not a real IP anyway)
+  return std::make_pair<uint32_t, uint32_t>(begin, std::max(end, end + 1));
+}
+
+torrent::Object
+apply_address_throttle(const torrent::Object::list_type& args) {
+  if (args.size() < 2 || args.size() > 3)
+    throw torrent::input_error("Incorrect number of arguments.");
+
+  std::pair<uint32_t, uint32_t> range = parse_address_range(args, ++args.begin());
+  core::ThrottleMap::iterator throttleItr = control->core()->throttles().find(args.begin()->as_string().c_str());
+  if (throttleItr == control->core()->throttles().end())
+    throw torrent::input_error("Throttle not found.");
+
+  control->core()->set_address_throttle(range.first, range.second, throttleItr->second);
+  return torrent::Object();
+}
+
+torrent::Object
+apply_encryption(const torrent::Object::list_type& args) {
   uint32_t options_mask = torrent::ConnectionManager::encryption_none;
 
-  for (torrent::Object::list_type::const_iterator itr = args.begin(), last = args.end(); itr != last; itr++) {
+  for (torrent::Object::list_const_iterator itr = args.begin(), last = args.end(); itr != last; itr++) {
     const std::string& opt = itr->as_string();
 
     if (opt == "none")
@@ -91,11 +203,9 @@ apply_encryption(const torrent::Object& rawArgs) {
 }
 
 torrent::Object
-apply_tos(const torrent::Object& rawArg) {
-  rpc::Command::value_type value;
+apply_tos(const torrent::Object::string_type& arg) {
+  rpc::command_base::value_type value;
   torrent::ConnectionManager* cm = torrent::connection_manager();
-
-  const std::string& arg = rawArg.as_string();
 
   if (arg == "default")
     value = torrent::ConnectionManager::iptos_default;
@@ -115,24 +225,57 @@ apply_tos(const torrent::Object& rawArg) {
   return torrent::Object();
 }
 
-void apply_hash_read_ahead(int arg)              { torrent::set_hash_read_ahead(arg << 20); }
-void apply_hash_interval(int arg)                { torrent::set_hash_interval(arg * 1000); }
-void apply_encoding_list(const std::string& arg) { torrent::encoding_list()->push_back(arg); }
+torrent::Object apply_hash_read_ahead(int arg)              { torrent::set_hash_read_ahead(arg << 20); return torrent::Object(); }
+torrent::Object apply_hash_interval(int arg)                { torrent::set_hash_interval(arg * 1000); return torrent::Object(); }
+torrent::Object apply_encoding_list(const std::string& arg) { torrent::encoding_list()->push_back(arg); return torrent::Object(); }
 
-void
+struct call_add_node_t {
+  call_add_node_t(int port) : m_port(port) { }
+
+  void operator() (const sockaddr* sa, int err) {
+    if (sa == NULL)
+      control->core()->push_log("Could not resolve host.");
+    else
+      torrent::dht_manager()->add_node(sa, m_port);
+  }
+
+  int m_port;
+};
+
+torrent::Object
+apply_dht_add_node(const std::string& arg) {
+  if (!torrent::dht_manager()->is_valid())
+    throw torrent::input_error("DHT not enabled.");
+
+  int port, ret;
+  char dummy;
+  char host[1024];
+
+  ret = std::sscanf(arg.c_str(), "%1023[^:]:%i%c", host, &port, &dummy);
+
+  if (ret == 1)
+    port = 6881;
+  else if (ret != 2)
+    throw torrent::input_error("Could not parse host.");
+
+  if (port < 1 || port > 65535)
+    throw torrent::input_error("Invalid port number.");
+
+  torrent::connection_manager()->resolver()(host, (int)rak::socket_address::pf_inet, SOCK_DGRAM, call_add_node_t(port));
+  return torrent::Object();
+}
+
+torrent::Object
 apply_enable_trackers(int64_t arg) {
   for (core::Manager::DListItr itr = control->core()->download_list()->begin(), last = control->core()->download_list()->end(); itr != last; ++itr) {
-    torrent::TrackerList tl = (*itr)->download()->tracker_list();
+    std::for_each((*itr)->tracker_list()->begin(), (*itr)->tracker_list()->end(),
+                  arg ? std::mem_fun(&torrent::Tracker::enable) : std::mem_fun(&torrent::Tracker::disable));
 
-    for (int i = 0, last = tl.size(); i < last; ++i)
-      if (arg)
-        tl.get(i).enable();
-      else
-        tl.get(i).disable();
-
-    if (arg && !rpc::call_command_value("get_use_udp_trackers"))
+    if (arg && !rpc::call_command_value("trackers.use_udp"))
       (*itr)->enable_udp_trackers(false);
   }    
+
+  return torrent::Object();
 }
 
 torrent::File*
@@ -149,11 +292,17 @@ xmlrpc_find_tracker(core::Download* download, uint32_t index) {
   if (index >= download->tracker_list()->size())
     return NULL;
 
-  // HACK ALERT!!!!
-  static torrent::Tracker hack;
-  hack = download->tracker_list()->get(index);
+  return download->tracker_list()->at(index);
+}
 
-  return &hack;
+torrent::Peer*
+xmlrpc_find_peer(core::Download* download, const torrent::HashString& hash) {
+  torrent::ConnectionList::iterator itr = download->connection_list()->find(hash.c_str());
+
+  if (itr == download->connection_list()->end())
+    return NULL;
+
+  return *itr;
 }
 
 void
@@ -162,6 +311,7 @@ initialize_xmlrpc() {
   rpc::xmlrpc.set_slot_find_download(rak::mem_fn(control->core()->download_list(), &core::DownloadList::find_hex_ptr));
   rpc::xmlrpc.set_slot_find_file(rak::ptr_fn(&xmlrpc_find_file));
   rpc::xmlrpc.set_slot_find_tracker(rak::ptr_fn(&xmlrpc_find_tracker));
+  rpc::xmlrpc.set_slot_find_peer(rak::ptr_fn(&xmlrpc_find_peer));
 
   unsigned int count = 0;
 
@@ -178,16 +328,15 @@ initialize_xmlrpc() {
   control->core()->push_log(buffer);
 }
 
-void
+torrent::Object
 apply_scgi(const std::string& arg, int type) {
-  if (control->scgi() != NULL)
+  if (worker_thread->scgi() != NULL)
     throw torrent::input_error("SCGI already enabled.");
 
   if (!rpc::xmlrpc.is_valid())
     initialize_xmlrpc();
 
-  // Fix this...
-  control->set_scgi(new rpc::SCgi);
+  rpc::SCgi* scgi = new rpc::SCgi;
 
   rak::address_info* ai = NULL;
   rak::socket_address sa;
@@ -222,28 +371,30 @@ apply_scgi(const std::string& arg, int type) {
         throw torrent::input_error("Invalid port number.");
 
       saPtr->set_port(port);
-      control->scgi()->open_port(saPtr, saPtr->length(), rpc::call_command_value("get_scgi_dont_route"));
+      scgi->open_port(saPtr, saPtr->length(), rpc::call_command_value("network.scgi.dont_route"));
 
       break;
 
     case 2:
     default:
-      control->scgi()->open_named(rak::path_expand(arg));
+      scgi->open_named(rak::path_expand(arg));
       break;
     }
 
-    rak::address_info::free_address_info(ai);
+    if (ai != NULL) rak::address_info::free_address_info(ai);
 
   } catch (torrent::local_error& e) {
-    rak::address_info::free_address_info(ai);
+    if (ai != NULL) rak::address_info::free_address_info(ai);
 
+    delete scgi;
     throw torrent::input_error(e.what());
   }
 
-  control->scgi()->set_slot_process(rak::mem_fn(&rpc::xmlrpc, &rpc::XmlRpc::process));
+  worker_thread->set_scgi(scgi);
+  return torrent::Object();
 }
 
-void
+torrent::Object
 apply_xmlrpc_dialect(const std::string& arg) {
   int value;
 
@@ -257,76 +408,123 @@ apply_xmlrpc_dialect(const std::string& arg) {
     value = -1;
 
   rpc::xmlrpc.set_dialect(value);
+  return torrent::Object();
 }
 
 void
 initialize_command_network() {
   torrent::ConnectionManager* cm = torrent::connection_manager();
-  core::CurlStack* httpStack = control->core()->get_poll_manager()->get_http_stack();
+  torrent::FileManager* fileManager = torrent::file_manager();
+  core::CurlStack* httpStack = control->core()->http_stack();
 
-  ADD_VARIABLE_BOOL("use_udp_trackers", true);
+  CMD2_VAR_BOOL    ("log.handshake", false);
+  CMD2_VAR_STRING  ("log.tracker",   "");
+
+  // CMD2_ANY_STRING  ("encoding_list",    std::tr1::bind(&apply_encoding_list, std::tr1::placeholders::_2));
+  CMD2_ANY_STRING  ("encoding.add", std::tr1::bind(&apply_encoding_list, std::tr1::placeholders::_2));
 
   // Isn't port_open used?
-  ADD_VARIABLE_BOOL("port_open", true);
-  ADD_VARIABLE_BOOL("port_random", true);
-  ADD_VARIABLE_STRING("port_range", "6881-6999");
+  CMD2_VAR_BOOL    ("network.port_open",   true);
+  CMD2_VAR_BOOL    ("network.port_random", true);
+  CMD2_VAR_STRING  ("network.port_range",  "6881-6999");
 
-  ADD_VARIABLE_STRING("connection_leech", "leech");
-  ADD_VARIABLE_STRING("connection_seed", "seed");
+  CMD2_VAR_BOOL    ("protocol.pex",            true);
+  CMD2_ANY_LIST    ("protocol.encryption.set", std::tr1::bind(&apply_encryption, std::tr1::placeholders::_2));
 
-  ADD_VARIABLE_VALUE("min_peers", 40);
-  ADD_VARIABLE_VALUE("max_peers", 100);
-  ADD_VARIABLE_VALUE("min_peers_seed", -1);
-  ADD_VARIABLE_VALUE("max_peers_seed", -1);
+  CMD2_VAR_STRING  ("protocol.connection.leech", "leech");
+  CMD2_VAR_STRING  ("protocol.connection.seed",  "seed");
 
-  ADD_VARIABLE_VALUE("max_uploads", 15);
+  CMD2_ANY         ("throttle.unchoked_uploads", std::tr1::bind(&torrent::currently_unchoked));
+  CMD2_ANY         ("throttle.unchoked_downloads", std::tr1::bind(&torrent::download_unchoked));
 
-  ADD_VARIABLE_VALUE("max_uploads_div",      1);
-  ADD_VARIABLE_VALUE("max_uploads_global",   0);
-  ADD_VARIABLE_VALUE("max_downloads_div",    1);
-  ADD_VARIABLE_VALUE("max_downloads_global", 0);
+  CMD2_VAR_VALUE   ("throttle.min_peers.normal", 40);
+  CMD2_VAR_VALUE   ("throttle.max_peers.normal", 100);
+  CMD2_VAR_VALUE   ("throttle.min_peers.seed",   -1);
+  CMD2_VAR_VALUE   ("throttle.max_peers.seed",   -1);
 
-//   ADD_COMMAND_VALUE_TRI("max_uploads_global",   rak::make_mem_fun(control->ui(), &ui::Root::set_max_uploads_global), rak::make_mem_fun(control->ui(), &ui::Root::max_uploads_global));
-//   ADD_COMMAND_VALUE_TRI("max_downloads_global", rak::make_mem_fun(control->ui(), &ui::Root::set_max_downloads_global), rak::make_mem_fun(control->ui(), &ui::Root::max_downloads_global));
+  CMD2_VAR_VALUE   ("throttle.max_uploads", 15);
 
-  ADD_COMMAND_VALUE_TRI_KB("download_rate",     rak::make_mem_fun(control->ui(), &ui::Root::set_down_throttle_i64), rak::ptr_fun(&torrent::down_throttle));
-  ADD_COMMAND_VALUE_TRI_KB("upload_rate",       rak::make_mem_fun(control->ui(), &ui::Root::set_up_throttle_i64), rak::ptr_fun(&torrent::up_throttle));
+  CMD2_VAR_VALUE   ("throttle.max_uploads.div",      1);
+  CMD2_VAR_VALUE   ("throttle.max_uploads.global",   0);
+  CMD2_VAR_VALUE   ("throttle.max_downloads.div",    1);
+  CMD2_VAR_VALUE   ("throttle.max_downloads.global", 0);
 
-  ADD_VARIABLE_VALUE("tracker_numwant", -1);
+  // TODO: Move the logic into some libtorrent function.
+  CMD2_ANY         ("throttle.global_up.rate",              std::tr1::bind(&torrent::Rate::rate, torrent::up_rate()));
+  CMD2_ANY         ("throttle.global_up.total",             std::tr1::bind(&torrent::Rate::total, torrent::up_rate()));
+  CMD2_ANY         ("throttle.global_up.max_rate",          std::tr1::bind(&torrent::Throttle::max_rate, torrent::up_throttle_global()));
+  CMD2_ANY_VALUE_V ("throttle.global_up.max_rate.set",      std::tr1::bind(&ui::Root::set_up_throttle_i64, control->ui(), std::tr1::placeholders::_2));
+  CMD2_ANY_VALUE_KB("throttle.global_up.max_rate.set_kb",   std::tr1::bind(&ui::Root::set_up_throttle_i64, control->ui(), std::tr1::placeholders::_2));
+  CMD2_ANY         ("throttle.global_down.rate",            std::tr1::bind(&torrent::Rate::rate, torrent::down_rate()));
+  CMD2_ANY         ("throttle.global_down.total",           std::tr1::bind(&torrent::Rate::total, torrent::down_rate()));
+  CMD2_ANY         ("throttle.global_down.max_rate",        std::tr1::bind(&torrent::Throttle::max_rate, torrent::down_throttle_global()));
+  CMD2_ANY_VALUE_V ("throttle.global_down.max_rate.set",    std::tr1::bind(&ui::Root::set_down_throttle_i64, control->ui(), std::tr1::placeholders::_2));
+  CMD2_ANY_VALUE_KB("throttle.global_down.max_rate.set_kb", std::tr1::bind(&ui::Root::set_down_throttle_i64, control->ui(), std::tr1::placeholders::_2));
 
-  ADD_COMMAND_LIST("encryption",          rak::ptr_fn(&apply_encryption));
+  // Temporary names, need to change this to accept real rates rather
+  // than kB.
+  CMD2_ANY_LIST    ("throttle.up",                          std::tr1::bind(&apply_throttle, std::tr1::placeholders::_2, true));
+  CMD2_ANY_LIST    ("throttle.down",                        std::tr1::bind(&apply_throttle, std::tr1::placeholders::_2, false));
+  CMD2_ANY_LIST    ("throttle.ip",                          std::tr1::bind(&apply_address_throttle, std::tr1::placeholders::_2));
 
-  ADD_COMMAND_STRING("tos",               rak::ptr_fn(&apply_tos));
+  CMD2_ANY_STRING  ("throttle.up.max",    std::tr1::bind(&retrieve_throttle_info, std::tr1::placeholders::_2, throttle_info_up | throttle_info_max));
+  CMD2_ANY_STRING  ("throttle.up.rate",   std::tr1::bind(&retrieve_throttle_info, std::tr1::placeholders::_2, throttle_info_up | throttle_info_rate));
+  CMD2_ANY_STRING  ("throttle.down.max",  std::tr1::bind(&retrieve_throttle_info, std::tr1::placeholders::_2, throttle_info_down | throttle_info_max));
+  CMD2_ANY_STRING  ("throttle.down.rate", std::tr1::bind(&retrieve_throttle_info, std::tr1::placeholders::_2, throttle_info_down | throttle_info_rate));
 
-  ADD_COMMAND_STRING_TRI("bind",          rak::make_mem_fun(control->core(), &core::Manager::set_bind_address), rak::make_mem_fun(control->core(), &core::Manager::bind_address));
-  ADD_COMMAND_STRING_TRI("ip",            rak::make_mem_fun(control->core(), &core::Manager::set_local_address), rak::make_mem_fun(control->core(), &core::Manager::local_address));
-  ADD_COMMAND_STRING_TRI("proxy_address", rak::make_mem_fun(control->core(), &core::Manager::set_proxy_address), rak::make_mem_fun(control->core(), &core::Manager::proxy_address));
-  ADD_COMMAND_STRING_TRI("http_proxy",    rak::make_mem_fun(httpStack, &core::CurlStack::set_http_proxy), rak::make_mem_fun(httpStack, &core::CurlStack::http_proxy));
-  ADD_COMMAND_STRING_TRI("http_capath",   rak::make_mem_fun(httpStack, &core::CurlStack::set_http_capath), rak::make_mem_fun(httpStack, &core::CurlStack::http_capath));
-  ADD_COMMAND_STRING_TRI("http_cacert",   rak::make_mem_fun(httpStack, &core::CurlStack::set_http_cacert), rak::make_mem_fun(httpStack, &core::CurlStack::http_cacert));
+  CMD2_ANY         ("network.http.capath",            std::tr1::bind(&core::CurlStack::http_capath, httpStack));
+  CMD2_ANY_STRING_V("network.http.capath.set",        std::tr1::bind(&core::CurlStack::set_http_capath, httpStack, std::tr1::placeholders::_2));
+  CMD2_ANY         ("network.http.cacert",            std::tr1::bind(&core::CurlStack::http_cacert, httpStack));
+  CMD2_ANY_STRING_V("network.http.cacert.set",        std::tr1::bind(&core::CurlStack::set_http_cacert, httpStack, std::tr1::placeholders::_2));
+  CMD2_ANY         ("network.http.proxy_address",     std::tr1::bind(&core::CurlStack::http_proxy, httpStack));
+  CMD2_ANY_STRING_V("network.http.proxy_address.set", std::tr1::bind(&core::CurlStack::set_http_proxy, httpStack, std::tr1::placeholders::_2));
+  CMD2_ANY         ("network.http.max_open",          std::tr1::bind(&core::CurlStack::max_active, httpStack));
+  CMD2_ANY_VALUE_V ("network.http.max_open.set",      std::tr1::bind(&core::CurlStack::set_max_active, httpStack, std::tr1::placeholders::_2));
 
-  ADD_COMMAND_VALUE_TRI("send_buffer_size",    rak::make_mem_fun(cm, &torrent::ConnectionManager::set_send_buffer_size), rak::make_mem_fun(cm, &torrent::ConnectionManager::send_buffer_size));
-  ADD_COMMAND_VALUE_TRI("receive_buffer_size", rak::make_mem_fun(cm, &torrent::ConnectionManager::set_receive_buffer_size), rak::make_mem_fun(cm, &torrent::ConnectionManager::receive_buffer_size));
+  CMD2_ANY         ("network.send_buffer.size",        std::tr1::bind(&torrent::ConnectionManager::send_buffer_size, cm));
+  CMD2_ANY_VALUE_V ("network.send_buffer.size.set",    std::tr1::bind(&torrent::ConnectionManager::set_send_buffer_size, cm, std::tr1::placeholders::_2));
+  CMD2_ANY         ("network.receive_buffer.size",     std::tr1::bind(&torrent::ConnectionManager::receive_buffer_size, cm));
+  CMD2_ANY_VALUE_V ("network.receive_buffer.size.set", std::tr1::bind(&torrent::ConnectionManager::set_receive_buffer_size, cm, std::tr1::placeholders::_2));
+  CMD2_ANY_STRING  ("network.tos.set",                 std::tr1::bind(&apply_tos, std::tr1::placeholders::_2));
 
-  ADD_COMMAND_VALUE_TRI("hash_max_tries",       std::ptr_fun(&torrent::set_hash_max_tries), rak::ptr_fun(&torrent::hash_max_tries));
-  ADD_COMMAND_VALUE_TRI("max_open_files",       std::ptr_fun(&torrent::set_max_open_files), rak::ptr_fun(&torrent::max_open_files));
-  ADD_COMMAND_VALUE_TRI("max_open_sockets",     rak::make_mem_fun(cm, &torrent::ConnectionManager::set_max_size), rak::make_mem_fun(cm, &torrent::ConnectionManager::max_size));
-  ADD_COMMAND_VALUE_TRI("max_open_http",        rak::make_mem_fun(httpStack, &core::CurlStack::set_max_active), rak::make_mem_fun(httpStack, &core::CurlStack::max_active));
+  CMD2_ANY         ("network.bind_address",        std::tr1::bind(&core::Manager::bind_address, control->core()));
+  CMD2_ANY_STRING_V("network.bind_address.set",    std::tr1::bind(&core::Manager::set_bind_address, control->core(), std::tr1::placeholders::_2));
+  CMD2_ANY         ("network.local_address",       std::tr1::bind(&core::Manager::local_address, control->core()));
+  CMD2_ANY_STRING_V("network.local_address.set",   std::tr1::bind(&core::Manager::set_local_address, control->core(), std::tr1::placeholders::_2));
+  CMD2_ANY         ("network.proxy_address",       std::tr1::bind(&core::Manager::proxy_address, control->core()));
+  CMD2_ANY_STRING_V("network.proxy_address.set",   std::tr1::bind(&core::Manager::set_proxy_address, control->core(), std::tr1::placeholders::_2));
 
-  ADD_COMMAND_STRING_UN("scgi_port",            rak::bind2nd(std::ptr_fun(&apply_scgi), 1));
-  ADD_COMMAND_STRING_UN("scgi_local",           rak::bind2nd(std::ptr_fun(&apply_scgi), 2));
-  ADD_VARIABLE_BOOL("scgi_dont_route", false);
-  ADD_COMMAND_STRING_UN("xmlrpc_dialect",       std::ptr_fun(&apply_xmlrpc_dialect));
+  CMD2_ANY         ("network.max_open_files",       std::tr1::bind(&torrent::FileManager::max_open_files, fileManager));
+  CMD2_ANY_VALUE_V ("network.max_open_files.set",   std::tr1::bind(&torrent::FileManager::set_max_open_files, fileManager, std::tr1::placeholders::_2));
+  CMD2_ANY         ("network.max_open_sockets",     std::tr1::bind(&torrent::ConnectionManager::max_size, cm));
+  CMD2_ANY_VALUE_V ("network.max_open_sockets.set", std::tr1::bind(&torrent::ConnectionManager::set_max_size, cm, std::tr1::placeholders::_2));
 
-  ADD_COMMAND_VALUE_TRI("hash_read_ahead",      std::ptr_fun(&apply_hash_read_ahead), rak::ptr_fun(torrent::hash_read_ahead));
-  ADD_COMMAND_VALUE_TRI("hash_interval",        std::ptr_fun(&apply_hash_interval), rak::ptr_fun(torrent::hash_interval));
+  CMD2_ANY_STRING  ("network.scgi.open_port",   std::tr1::bind(&apply_scgi, std::tr1::placeholders::_2, 1));
+  CMD2_ANY_STRING  ("network.scgi.open_local",  std::tr1::bind(&apply_scgi, std::tr1::placeholders::_2, 2));
+  CMD2_VAR_BOOL    ("network.scgi.dont_route",  false);
 
-  ADD_COMMAND_VALUE_UN("enable_trackers",       std::ptr_fun(&apply_enable_trackers));
-  ADD_COMMAND_STRING_UN("encoding_list",        std::ptr_fun(&apply_encoding_list));
+  CMD2_ANY_STRING  ("network.xmlrpc.dialect.set",    std::tr1::bind(&apply_xmlrpc_dialect, std::tr1::placeholders::_2));
+  CMD2_ANY         ("network.xmlrpc.size_limit",     std::tr1::bind(&rpc::XmlRpc::size_limit));
+  CMD2_ANY_VALUE_V ("network.xmlrpc.size_limit.set", std::tr1::bind(&rpc::XmlRpc::set_size_limit, std::tr1::placeholders::_2));
 
-  ADD_VARIABLE_BOOL("peer_exchange", false);
+  CMD2_ANY         ("system.hash.read_ahead",        std::tr1::bind(&torrent::hash_read_ahead));
+  CMD2_ANY_VALUE_V ("system.hash.read_ahead.set",    std::tr1::bind(&apply_hash_read_ahead, std::tr1::placeholders::_2));
+  CMD2_ANY         ("system.hash.interval",          std::tr1::bind(&torrent::hash_interval));
+  CMD2_ANY_VALUE_V ("system.hash.interval.set",      std::tr1::bind(&apply_hash_interval, std::tr1::placeholders::_2));
+  CMD2_ANY         ("system.hash.max_tries",         std::tr1::bind(&torrent::hash_max_tries));
+  CMD2_ANY_VALUE_V ("system.hash.max_tries.set",     std::tr1::bind(&torrent::set_hash_max_tries, std::tr1::placeholders::_2));
 
-  // Not really network stuff:
-  ADD_VARIABLE_BOOL("handshake_log", false);
-  ADD_VARIABLE_STRING("tracker_dump", "");
+  CMD2_ANY_VALUE   ("trackers.enable",  std::tr1::bind(&apply_enable_trackers, int64_t(1)));
+  CMD2_ANY_VALUE   ("trackers.disable", std::tr1::bind(&apply_enable_trackers, int64_t(0)));
+  CMD2_VAR_VALUE   ("trackers.numwant", -1);
+  CMD2_VAR_BOOL    ("trackers.use_udp", true);
+
+//   CMD2_ANY_V       ("dht.enable",     std::tr1::bind(&core::DhtManager::set_start, control->dht_manager()));
+//   CMD2_ANY_V       ("dht.disable",    std::tr1::bind(&core::DhtManager::set_stop, control->dht_manager()));
+  CMD2_ANY_STRING_V("dht.mode.set",          std::tr1::bind(&core::DhtManager::set_mode, control->dht_manager(), std::tr1::placeholders::_2));
+  CMD2_VAR_VALUE   ("dht.port",              int64_t(6881));
+  CMD2_ANY_STRING  ("dht.add_node",          std::tr1::bind(&apply_dht_add_node, std::tr1::placeholders::_2));
+  CMD2_ANY         ("dht.statistics",        std::tr1::bind(&core::DhtManager::dht_statistics, control->dht_manager()));
+  CMD2_ANY         ("dht.throttle.name",     std::tr1::bind(&core::DhtManager::throttle_name, control->dht_manager()));
+  CMD2_ANY_STRING_V("dht.throttle.name.set", std::tr1::bind(&core::DhtManager::set_throttle_name, control->dht_manager(), std::tr1::placeholders::_2));
 }

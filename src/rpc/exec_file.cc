@@ -36,8 +36,10 @@
 
 #include "config.h"
 
+#include <fcntl.h>
 #include <string>
 #include <unistd.h>
+#include <rak/error_number.h>
 #include <rak/path.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -50,7 +52,7 @@ namespace rpc {
 // Close m_logFd.
 
 int
-ExecFile::execute(const char* file, char* const* argv) {
+ExecFile::execute(const char* file, char* const* argv, int flags) {
   // Write the execued command and its parameters to the log fd.
   if (m_logFd != -1) {
     for (char* const* itr = argv; *itr != NULL; itr++) {
@@ -65,20 +67,38 @@ ExecFile::execute(const char* file, char* const* argv) {
     write(m_logFd, "\n---\n", sizeof("\n---\n"));
   }
 
+  int pipeFd[2];
+
+  if ((flags & flag_capture) && pipe(pipeFd))
+    throw torrent::input_error("ExecFile::execute(...) Pipe creation failed.");
+
   pid_t childPid = fork();
 
   if (childPid == -1)
     throw torrent::input_error("ExecFile::execute(...) Fork failed.");
 
   if (childPid == 0) {
-    ::close(0);
-    ::close(1);
-    ::close(2);
+    int devNull = open("/dev/null", O_RDWR);
+    if (devNull != -1)
+      dup2(devNull, 0);
+    else
+      ::close(0);
 
-    if (m_logFd != -1) {
+    if (flags & flag_capture)
+      dup2(pipeFd[1], 1);
+    else if (m_logFd != -1)
       dup2(m_logFd, 1);
+    else if (devNull != -1)
+      dup2(devNull, 1);
+    else
+      ::close(1);
+
+    if (m_logFd != -1)
       dup2(m_logFd, 2);
-    }
+    else if (devNull != -1)
+      dup2(devNull, 2);
+    else
+      ::close(2);
 
     // Close all fd's.
     for (int i = 3, last = sysconf(_SC_OPEN_MAX); i != last; i++)
@@ -89,9 +109,35 @@ ExecFile::execute(const char* file, char* const* argv) {
     _exit(result);
 
   } else {
-    int status;
+    if (flags & flag_capture) {
+      m_capture = std::string();
+      ::close(pipeFd[1]);
 
-    if (waitpid(childPid, &status, 0) != childPid)
+      char buffer[4096];
+      ssize_t length;
+
+      do {
+        length = read(pipeFd[0], buffer, sizeof(buffer));
+
+        if (length > 0)
+          m_capture += std::string(buffer, length);
+      } while (length > 0);
+
+      ::close(pipeFd[0]);
+
+      if (m_logFd != -1) {
+        write(m_logFd, "Captured output:\n", sizeof("Captured output:\n"));
+        write(m_logFd, m_capture.data(), m_capture.length());
+      }
+    }
+
+    int status;
+    int wpid = waitpid(childPid, &status, 0);
+
+    while (wpid == -1 && rak::error_number::current().value() == rak::error_number::e_intr)
+      wpid = waitpid(childPid, &status, 0);
+
+    if (wpid != childPid)
       throw torrent::internal_error("ExecFile::execute(...) waitpid failed.");
 
     // Check return value?
@@ -120,7 +166,7 @@ ExecFile::execute_object(const torrent::Object& rawArgs, int flags) {
   if (args.empty())
     throw torrent::input_error("Too few arguments.");
 
-  for (torrent::Object::list_type::const_iterator itr = args.begin(), last = args.end(); itr != last; itr++, argsCurrent++) {
+  for (torrent::Object::list_const_iterator itr = args.begin(), last = args.end(); itr != last; itr++, argsCurrent++) {
     if (argsCurrent == argsBuffer + max_args - 1)
       throw torrent::input_error("Too many arguments.");
 
@@ -138,10 +184,13 @@ ExecFile::execute_object(const torrent::Object& rawArgs, int flags) {
 
   *argsCurrent = NULL;
 
-  int status = execute(argsBuffer[0], argsBuffer);
+  int status = execute(argsBuffer[0], argsBuffer, flags);
 
   if ((flags & flag_throw) && status != 0)
     throw torrent::input_error("Bad return code.");
+
+  if (flags & flag_capture)
+    return m_capture;
 
   return torrent::Object((int64_t)status);
 }

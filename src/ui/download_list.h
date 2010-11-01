@@ -101,8 +101,11 @@ public:
   void                activate_display(Display d);
 
   core::View*         current_view();
+  void                set_current_view(const std::string& name);
 
   void                slot_open_uri(SlotOpenUri s) { m_slotOpenUri = s; }
+
+  void                unfocus_download(core::Download* d);
 
 private:
   DownloadList(const DownloadList&);
@@ -110,8 +113,6 @@ private:
 
   void                receive_view_input(Input type);
   void                receive_exit_input(Input type);
-
-  void                receive_download_erased(core::Download* d);
 
   void                setup_keys();
   void                setup_input();

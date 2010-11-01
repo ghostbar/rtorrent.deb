@@ -50,7 +50,7 @@ namespace ui {
 namespace core {
   class Manager;
   class ViewManager;
-  class Scheduler;
+  class DhtManager;
 }
 
 namespace display {
@@ -64,9 +64,8 @@ namespace input {
 
 namespace rpc {
   class CommandScheduler;
-  class FastCgi;
-  class SCgi;
   class XmlRpc;
+  class object_storage;
 }
 
 class Control {
@@ -74,23 +73,23 @@ public:
   Control();
   ~Control();
   
-  bool                is_shutdown_completed()       { return m_shutdownQuick && torrent::is_inactive(); }
+  bool                is_shutdown_completed();
   bool                is_shutdown_received()        { return m_shutdownReceived; }
   bool                is_shutdown_started()         { return m_shutdownQuick; }
 
   void                initialize();
   void                cleanup();
+  void                cleanup_exception();
 
   void                handle_shutdown();
 
-  void                receive_normal_shutdown()     { m_shutdownReceived = true; }
-  void                receive_quick_shutdown()      { m_shutdownReceived = true; m_shutdownQuick = true; }
+  void                receive_normal_shutdown()     { m_shutdownReceived = true; __sync_synchronize(); }
+  void                receive_quick_shutdown()      { m_shutdownReceived = true; m_shutdownQuick = true; __sync_synchronize(); }
 
   core::Manager*      core()                        { return m_core; }
   core::ViewManager*  view_manager()                { return m_viewManager; }
-  core::Scheduler*    scheduler()                   { return m_scheduler; }
+  core::DhtManager*   dht_manager()                 { return m_dhtManager; }
 
-  torrent::Poll*      poll();
 
   ui::Root*           ui()                          { return m_ui; }
   display::Manager*   display()                     { return m_display; }
@@ -98,9 +97,7 @@ public:
   input::InputEvent*  input_stdin()                 { return m_inputStdin; }
 
   rpc::CommandScheduler* command_scheduler()        { return m_commandScheduler; }
-
-  rpc::SCgi*          scgi()                        { return m_scgi; }
-  void                set_scgi(rpc::SCgi* f)        { m_scgi = f; }
+  rpc::object_storage*   object_storage()           { return m_objectStorage; }
 
   uint64_t            tick() const                  { return m_tick; }
   void                inc_tick()                    { m_tick++; }
@@ -112,12 +109,9 @@ private:
   Control(const Control&);
   void operator = (const Control&);
 
-  bool                m_shutdownReceived;
-  bool                m_shutdownQuick;
-
   core::Manager*      m_core;
   core::ViewManager*  m_viewManager;
-  core::Scheduler*    m_scheduler;
+  core::DhtManager*   m_dhtManager;
 
   ui::Root*           m_ui;
   display::Manager*   m_display;
@@ -125,8 +119,7 @@ private:
   input::InputEvent*  m_inputStdin;
 
   rpc::CommandScheduler* m_commandScheduler;
-
-  rpc::SCgi*          m_scgi;
+  rpc::object_storage*   m_objectStorage;
 
   uint64_t            m_tick;
 
@@ -134,6 +127,9 @@ private:
   std::string         m_workingDirectory;
 
   rak::priority_item  m_taskShutdown;
+
+  bool                m_shutdownReceived lt_cacheline_aligned;
+  bool                m_shutdownQuick lt_cacheline_aligned;
 };
 
 #endif

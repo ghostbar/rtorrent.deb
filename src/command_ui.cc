@@ -36,26 +36,27 @@
 
 #include "config.h"
 
+#include <sys/types.h>
+
+#include <ctime>
 #include <rak/functional.h>
 #include <rak/functional_fun.h>
 #include <sigc++/adaptors/bind.h>
 
 #include "core/manager.h"
 #include "core/view_manager.h"
-#include "rpc/command_slot.h"
-#include "rpc/command_variable.h"
+#include "ui/root.h"
+#include "ui/download_list.h"
 #include "rpc/parse.h"
 
 #include "globals.h"
 #include "control.h"
 #include "command_helpers.h"
 
-typedef void (core::ViewManager::*view_filter_slot)(const std::string&, const core::ViewManager::sort_args&);
+typedef void (core::ViewManager::*view_cfilter_slot)(const std::string&, const std::string&);
 
 torrent::Object
-apply_view_filter(view_filter_slot viewFilterSlot, const torrent::Object& rawArgs) {
-  const torrent::Object::list_type& args = rawArgs.as_list();
-
+apply_view_filter_on(const torrent::Object::list_type& args) {
   if (args.size() < 1)
     throw torrent::input_error("Too few arguments.");
 
@@ -66,18 +67,31 @@ apply_view_filter(view_filter_slot viewFilterSlot, const torrent::Object& rawArg
 
   core::ViewManager::filter_args filterArgs;
 
-  for (torrent::Object::list_type::const_iterator itr = ++args.begin(), last = args.end(); itr != last; itr++)
+  for (torrent::Object::list_const_iterator itr = ++args.begin(), last = args.end(); itr != last; itr++)
     filterArgs.push_back(itr->as_string());
 
-  (control->view_manager()->*viewFilterSlot)(name, filterArgs);
+  control->view_manager()->set_filter_on(name, filterArgs);
 
   return torrent::Object();
 }
 
 torrent::Object
-apply_view_sort(const torrent::Object& rawArgs) {
-  const torrent::Object::list_type& args = rawArgs.as_list();
+apply_view_cfilter(view_cfilter_slot viewFilterSlot, const torrent::Object::list_type& args) {
+  if (args.size() != 2)
+    throw torrent::input_error("Too few arguments.");
 
+  const std::string& name = args.front().as_string();
+  
+  if (name.empty())
+    throw torrent::input_error("First argument must be a string.");
+
+  (control->view_manager()->*viewFilterSlot)(name, args.back().as_string());
+
+  return torrent::Object();
+}
+
+torrent::Object
+apply_view_sort(const torrent::Object::list_type& args) {
   if (args.size() <= 0 || args.size() > 2)
     throw torrent::input_error("Wrong argument count.");
 
@@ -97,14 +111,30 @@ apply_view_sort(const torrent::Object& rawArgs) {
 }
 
 torrent::Object
-apply_view_list(const torrent::Object&) {
-  torrent::Object rawResult(torrent::Object::TYPE_LIST);
+apply_view_list() {
+  torrent::Object rawResult = torrent::Object::create_list();
   torrent::Object::list_type& result = rawResult.as_list();
 
   for (core::ViewManager::const_iterator itr = control->view_manager()->begin(), last = control->view_manager()->end(); itr != last; itr++)
     result.push_back((*itr)->name());
 
   return rawResult;
+}
+
+torrent::Object
+apply_view_set(const torrent::Object::list_type& args) {
+  if (args.size() != 2)
+    throw torrent::input_error("Wrong argument count.");
+
+  core::ViewManager::iterator itr = control->view_manager()->find(args.back().as_string());
+
+  if (itr == control->view_manager()->end())
+    throw torrent::input_error("Could not find view \"" + args.back().as_string() + "\".");
+
+//   if (args.front().as_string() == "main")
+//     control->ui()->download_list()->set_view(*itr);
+//   else
+    throw torrent::input_error("No such target.");
 }
 
 torrent::Object
@@ -124,30 +154,119 @@ apply_cat(rpc::target_type target, const torrent::Object& rawArgs) {
   return result;
 }
 
+// Move these boolean operators to a new file.
+
+bool
+as_boolean(const torrent::Object& rawArgs) {
+  switch (rawArgs.type()) {
+  case torrent::Object::TYPE_VALUE:  return rawArgs.as_value();
+  case torrent::Object::TYPE_STRING: return !rawArgs.as_string().empty();
+  case torrent::Object::TYPE_LIST:   return !rawArgs.as_list().empty();
+  case torrent::Object::TYPE_MAP:    return !rawArgs.as_map().empty();
+  default: return false;
+  }
+}
+
 torrent::Object
-apply_to_date(const torrent::Object& rawArgs) {
+apply_not(rpc::target_type target, const torrent::Object& rawArgs) {
+  return (int64_t)!as_boolean(rawArgs);
+}
+
+torrent::Object
+apply_false(rpc::target_type target, const torrent::Object& rawArgs) {
+  return (int64_t)0;
+}
+
+torrent::Object
+apply_and(rpc::target_type target, const torrent::Object& rawArgs) {
+  if (rawArgs.type() != torrent::Object::TYPE_LIST)
+    return as_boolean(rawArgs);
+
+  for (torrent::Object::list_const_iterator itr = rawArgs.as_list().begin(), last = rawArgs.as_list().end(); itr != last; itr++)
+    if (!as_boolean(rpc::parse_command_single(target, itr->as_string())))
+      return (int64_t)false;
+
+  return (int64_t)true;
+}
+
+torrent::Object
+apply_or(rpc::target_type target, const torrent::Object& rawArgs) {
+  if (rawArgs.type() != torrent::Object::TYPE_LIST)
+    return as_boolean(rawArgs);
+
+  for (torrent::Object::list_const_iterator itr = rawArgs.as_list().begin(), last = rawArgs.as_list().end(); itr != last; itr++)
+    if (as_boolean(rpc::parse_command_single(target, itr->as_string())))
+      return (int64_t)true;
+
+  return (int64_t)false;
+}
+
+torrent::Object
+apply_cmp(rpc::target_type target, const torrent::Object::list_type& args) {
+  // We only need to check if empty() since if size() == 1 it calls
+  // the same command for both, or if size() == 2 then each side of
+  // the comparison has different commands.
+  if (args.empty())
+    throw torrent::input_error("Wrong argument count.");
+
+  // This really should be converted to using args flagged as
+  // commands, so that we can compare commands and statics values.
+
+  torrent::Object result1;
+  torrent::Object result2;
+
+  if (rpc::is_target_pair(target)) {
+    result1 = rpc::parse_command_single(rpc::get_target_left(target), args.front().as_string());
+    result2 = rpc::parse_command_single(rpc::get_target_right(target), args.back().as_string());
+  } else {
+    result1 = rpc::parse_command_single(target, args.front().as_string());
+    result2 = rpc::parse_command_single(target, args.back().as_string());
+  }    
+
+  if (result1.type() != result2.type())
+    throw torrent::input_error("Type mismatch.");
+    
+  switch (result1.type()) {
+  case torrent::Object::TYPE_VALUE:  return result1.as_value() - result2.as_value();
+  case torrent::Object::TYPE_STRING: return result1.as_string().compare(result2.as_string());
+  default: return torrent::Object();
+  }
+}
+
+torrent::Object apply_less(rpc::target_type target, const torrent::Object::list_type& args) {
+  torrent::Object result = apply_cmp(target, args);
+  return result.is_value() ? result.as_value() <  0 : (int64_t)false;
+}
+
+torrent::Object apply_greater(rpc::target_type target, const torrent::Object::list_type& args) {
+  torrent::Object result = apply_cmp(target, args);
+  return result.is_value() ? result.as_value() >  0 : (int64_t)false;
+}
+
+torrent::Object apply_equal(rpc::target_type target, const torrent::Object::list_type& args) {
+  torrent::Object result = apply_cmp(target, args);
+  return result.is_value() ? result.as_value() == 0 : (int64_t)false;
+}
+
+torrent::Object
+apply_to_time(const torrent::Object& rawArgs, int flags) {
+  std::tm *u;
   time_t t = (uint64_t)rawArgs.as_value();
-  std::tm *u = std::gmtime(&t);
+
+  if (flags & 0x1)
+    u = std::localtime(&t);
+  else
+    u = std::gmtime(&t);
   
   if (u == NULL)
     return torrent::Object();
 
   char buffer[11];
-  snprintf(buffer, 11, "%02u/%02u/%04u", u->tm_mday, (u->tm_mon + 1), (1900 + u->tm_year));
-  
-  return std::string(buffer);
-}
 
-torrent::Object
-apply_to_time(const torrent::Object& rawArgs) {
-  time_t t = (uint64_t)rawArgs.as_value();
-  std::tm *u = std::gmtime(&t);
-  
-  if (u == NULL)
-    return torrent::Object();
-
-  char buffer[9];
-  snprintf(buffer, 9, "%2d:%02d:%02d", u->tm_hour, u->tm_min, u->tm_sec);
+  if (flags & 0x2)
+    snprintf(buffer, 11, "%02u/%02u/%04u", u->tm_mday, (u->tm_mon + 1), (1900 + u->tm_year));
+  else
+    snprintf(buffer, 9, "%2d:%02d:%02d", u->tm_hour, u->tm_min, u->tm_sec);
 
   return std::string(buffer);
 }
@@ -195,6 +314,19 @@ apply_to_xb(const torrent::Object& rawArgs) {
   return std::string(buffer);
 }
 
+torrent::Object
+apply_to_throttle(const torrent::Object& rawArgs) {
+  int64_t arg = rawArgs.as_value();  
+  if (arg < 0)
+    return "---";
+  else if (arg == 0)
+    return "off";
+
+  char buffer[32];
+  snprintf(buffer, 32, "%3d", (int)(arg / (1 << 10)));
+  return std::string(buffer);
+}
+
 // A series of if/else statements. Every even arguments are
 // conditionals and odd arguments are branches to be executed, except
 // the last one which is always a branch.
@@ -205,16 +337,16 @@ apply_to_xb(const torrent::Object& rawArgs) {
 // if (cond1) { branch1 } else if (cond2) { branch2 } else { branch3 }
 // <cond1>,<branch1>,<cond2>,<branch2>,<branch3>
 torrent::Object
-apply_if(rpc::target_type target, const torrent::Object& rawArgs) {
+apply_if(rpc::target_type target, const torrent::Object& rawArgs, int flags) {
   const torrent::Object::list_type& args = rawArgs.as_list();
-  torrent::Object::list_type::const_iterator itr = args.begin();
+  torrent::Object::list_const_iterator itr = args.begin();
 
   while (itr != args.end() && itr != --args.end()) {
     torrent::Object tmp;
     const torrent::Object* conditional;
 
-    if (itr->is_string() && *itr->as_string().c_str() == '$')
-      conditional = &(tmp = rpc::parse_command(target, itr->as_string().c_str() + 1, itr->as_string().c_str() + itr->as_string().size()).first);
+    if (flags & 0x1 && itr->is_string())
+      conditional = &(tmp = rpc::parse_command(target, itr->as_string().c_str(), itr->as_string().c_str() + itr->as_string().size()).first);
     else
       conditional = &*itr;
 
@@ -226,6 +358,9 @@ apply_if(rpc::target_type target, const torrent::Object& rawArgs) {
       break;
     case torrent::Object::TYPE_VALUE:
       result = conditional->as_value();
+      break;
+    case torrent::Object::TYPE_NONE:
+      result = false;
       break;
     default:
       throw torrent::input_error("Type not supported by 'if'.");
@@ -242,36 +377,141 @@ apply_if(rpc::target_type target, const torrent::Object& rawArgs) {
   if (itr == args.end())
     return torrent::Object();
 
-  if (itr->is_string() && *itr->as_string().c_str() == '$')
-    return rpc::parse_command(target, itr->as_string().c_str() + 1, itr->as_string().c_str() + itr->as_string().size()).first;
-  else
+  if (flags & 0x1 && itr->is_string()) {
+    return rpc::parse_command(target, itr->as_string().c_str(), itr->as_string().c_str() + itr->as_string().size()).first;
+
+  } else if (flags & 0x1 && itr->is_list()) {
+    // Move this into a special function or something. Also, might be
+    // nice to have a parse_command function that takes list
+    // iterator...
+
+    for (torrent::Object::list_type::const_iterator cmdItr = itr->as_list().begin(), last = itr->as_list().end(); cmdItr != last; cmdItr++)
+      if (cmdItr->is_string())
+        rpc::parse_command(target, cmdItr->as_string().c_str(), cmdItr->as_string().c_str() + cmdItr->as_string().size());
+
+    return torrent::Object();
+
+  } else {
     return *itr;
+  }
+}
+
+torrent::Object
+cmd_view_size(const torrent::Object::string_type& args) {
+  return (*control->view_manager()->find_throw(args))->size_visible();
+}
+
+torrent::Object
+cmd_view_size_not_visible(const torrent::Object::string_type& args) {
+  return (*control->view_manager()->find_throw(args))->size_not_visible();
+}
+
+torrent::Object
+cmd_view_persistent(const torrent::Object::string_type& args) {
+  core::View* view = *control->view_manager()->find_throw(args);
+  
+  if (!view->get_filter().empty() || !view->get_event_added().empty() || !view->get_event_removed().empty())
+    throw torrent::input_error("Cannot set modified views as persitent.");
+
+  view->set_filter("d.views.has=" + args);
+  view->set_event_added("d.views.push_back_unique=" + args);
+  view->set_event_removed("d.views.remove=" + args);
+
+  return torrent::Object();
+}
+
+// TODO: These don't need wrapper functions anymore...
+torrent::Object
+cmd_ui_set_view(const torrent::Object::string_type& args) {
+  control->ui()->download_list()->set_current_view(args);
+  return torrent::Object();
+}
+
+torrent::Object
+cmd_ui_unfocus_download(core::Download* download) {
+  control->ui()->download_list()->unfocus_download(download);
+
+  return torrent::Object();
+}
+
+torrent::Object
+cmd_view_filter_download(core::Download* download, const torrent::Object::string_type& args) {
+  (*control->view_manager()->find_throw(args))->filter_download(download);
+
+  return torrent::Object();
+}
+
+torrent::Object
+cmd_view_set_visible(core::Download* download, const torrent::Object::string_type& args) {
+  (*control->view_manager()->find_throw(args))->set_visible(download);
+
+  return torrent::Object();
+}
+
+torrent::Object
+cmd_view_set_not_visible(core::Download* download, const torrent::Object::string_type& args) {
+  (*control->view_manager()->find_throw(args))->set_not_visible(download);
+
+  return torrent::Object();
 }
 
 void
 initialize_command_ui() {
-  ADD_VARIABLE_STRING("key_layout", "qwerty");
+  CMD2_VAR_STRING("keys.layout", "qwerty");
 
-  ADD_COMMAND_STRING("view_add",        rpc::object_string_fn(rak::make_mem_fun(control->view_manager(), &core::ViewManager::insert_throw)));
-  ADD_COMMAND_NONE_L("view_list",       rak::ptr_fn(&apply_view_list));
+  CMD2_ANY_STRING("view.add", object_convert_void(std::tr1::bind(&core::ViewManager::insert_throw, control->view_manager(), std::tr1::placeholders::_2)));
 
-  ADD_COMMAND_LIST("view_filter",       rak::bind_ptr_fn(&apply_view_filter, &core::ViewManager::set_filter));
-  ADD_COMMAND_LIST("view_filter_on",    rak::bind_ptr_fn(&apply_view_filter, &core::ViewManager::set_filter_on));
+  CMD2_ANY_L   ("view.list",          std::tr1::bind(&apply_view_list));
+  CMD2_ANY_LIST("view.set",           std::tr1::bind(&apply_view_set, std::tr1::placeholders::_2));
 
-  ADD_COMMAND_LIST("view_sort",         rak::ptr_fn(&apply_view_sort));
-  ADD_COMMAND_LIST("view_sort_new",     rak::bind_ptr_fn(&apply_view_filter, &core::ViewManager::set_sort_new));
-  ADD_COMMAND_LIST("view_sort_current", rak::bind_ptr_fn(&apply_view_filter, &core::ViewManager::set_sort_current));
+  CMD2_ANY_LIST("view.filter",        std::tr1::bind(&apply_view_cfilter, &core::ViewManager::set_filter, std::tr1::placeholders::_2));
+  CMD2_ANY_LIST("view.filter_on",     std::tr1::bind(&apply_view_filter_on, std::tr1::placeholders::_2));
 
-//   ADD_COMMAND_LIST("view_sort_current", rak::bind_ptr_fn(&apply_view_filter, &core::ViewManager::set_sort_current));
+  CMD2_ANY_LIST("view.sort",          std::tr1::bind(&apply_view_sort, std::tr1::placeholders::_2));
+  CMD2_ANY_LIST("view.sort_new",      std::tr1::bind(&apply_view_cfilter, &core::ViewManager::set_sort_new, std::tr1::placeholders::_2));
+  CMD2_ANY_LIST("view.sort_current",  std::tr1::bind(&apply_view_cfilter, &core::ViewManager::set_sort_current, std::tr1::placeholders::_2));
 
-  ADD_ANY_NONE("print",             rak::ptr_fn(&apply_print));
-  ADD_ANY_NONE("cat",               rak::ptr_fn(&apply_cat));
-  ADD_ANY_NONE("if",                rak::ptr_fn(&apply_if));
+  CMD2_ANY_LIST("view.event_added",   std::tr1::bind(&apply_view_cfilter, &core::ViewManager::set_event_added, std::tr1::placeholders::_2));
+  CMD2_ANY_LIST("view.event_removed", std::tr1::bind(&apply_view_cfilter, &core::ViewManager::set_event_removed, std::tr1::placeholders::_2));
 
-  ADD_COMMAND_VALUE("to_date",          rak::ptr_fn(&apply_to_date));
-  ADD_COMMAND_VALUE("to_time",          rak::ptr_fn(&apply_to_time));
-  ADD_COMMAND_VALUE("to_elapsed_time",  rak::ptr_fn(&apply_to_elapsed_time));
-  ADD_COMMAND_VALUE("to_kb",            rak::ptr_fn(&apply_to_kb));
-  ADD_COMMAND_VALUE("to_mb",            rak::ptr_fn(&apply_to_mb));
-  ADD_COMMAND_VALUE("to_xb",            rak::ptr_fn(&apply_to_xb));
+  // Cleanup and add . to view.
+
+  CMD2_ANY_STRING("view.size",              std::tr1::bind(&cmd_view_size, std::tr1::placeholders::_2));
+  CMD2_ANY_STRING("view.size_not_visible",  std::tr1::bind(&cmd_view_size_not_visible, std::tr1::placeholders::_2));
+  CMD2_ANY_STRING("view.persistent",        std::tr1::bind(&cmd_view_persistent, std::tr1::placeholders::_2));
+
+  CMD2_DL_STRING ("view.filter_download", std::tr1::bind(&cmd_view_filter_download, std::tr1::placeholders::_1, std::tr1::placeholders::_2));
+  CMD2_DL_STRING ("view.set_visible",     std::tr1::bind(&cmd_view_set_visible,     std::tr1::placeholders::_1, std::tr1::placeholders::_2));
+  CMD2_DL_STRING ("view.set_not_visible", std::tr1::bind(&cmd_view_set_not_visible, std::tr1::placeholders::_1, std::tr1::placeholders::_2));
+
+  // Commands that affect the default rtorrent UI.
+  CMD2_DL        ("ui.unfocus_download",   std::tr1::bind(&cmd_ui_unfocus_download, std::tr1::placeholders::_1));
+  CMD2_ANY_STRING("ui.current_view.set",   std::tr1::bind(&cmd_ui_set_view, std::tr1::placeholders::_2));
+
+  // Move.
+  CMD2_ANY("print", &apply_print);
+  CMD2_ANY("cat",   &apply_cat);
+  CMD2_ANY("if",    std::tr1::bind(&apply_if, std::tr1::placeholders::_1, std::tr1::placeholders::_2, 0));
+  CMD2_ANY("not",   &apply_not);
+  CMD2_ANY("false", &apply_false);
+  CMD2_ANY("and",   &apply_and);
+  CMD2_ANY("or",    &apply_or);
+
+  // A temporary command for handling stuff until we get proper
+  // support for seperation of commands and literals.
+  CMD2_ANY("branch", std::tr1::bind(&apply_if, std::tr1::placeholders::_1, std::tr1::placeholders::_2, 1));
+
+  CMD2_ANY_LIST("less",    &apply_less);
+  CMD2_ANY_LIST("greater", &apply_greater);
+  CMD2_ANY_LIST("equal",   &apply_equal);
+
+  CMD2_ANY_VALUE("convert.gm_time",      std::tr1::bind(&apply_to_time, std::tr1::placeholders::_2, 0));
+  CMD2_ANY_VALUE("convert.gm_date",      std::tr1::bind(&apply_to_time, std::tr1::placeholders::_2, 0x2));
+  CMD2_ANY_VALUE("convert.time",         std::tr1::bind(&apply_to_time, std::tr1::placeholders::_2, 0x1));
+  CMD2_ANY_VALUE("convert.date",         std::tr1::bind(&apply_to_time, std::tr1::placeholders::_2, 0x1 | 0x2));
+  CMD2_ANY_VALUE("convert.elapsed_time", std::tr1::bind(&apply_to_elapsed_time, std::tr1::placeholders::_2));
+  CMD2_ANY_VALUE("convert.kb",           std::tr1::bind(&apply_to_kb, std::tr1::placeholders::_2));
+  CMD2_ANY_VALUE("convert.mb",           std::tr1::bind(&apply_to_mb, std::tr1::placeholders::_2));
+  CMD2_ANY_VALUE("convert.xb",           std::tr1::bind(&apply_to_xb, std::tr1::placeholders::_2));
+  CMD2_ANY_VALUE("convert.throttle",     std::tr1::bind(&apply_to_throttle, std::tr1::placeholders::_2));
 }

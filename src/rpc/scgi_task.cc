@@ -36,7 +36,9 @@
 
 #include "config.h"
 
+#include <rak/allocators.h>
 #include <rak/error_number.h>
+#include <cstdio>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <torrent/exceptions.h>
@@ -56,17 +58,27 @@
 
 namespace rpc {
 
+// If bufferSize is zero then memcpy won't do anything.
+inline void
+SCgiTask::realloc_buffer(uint32_t size, const char* buffer, uint32_t bufferSize) {
+  char* tmp = rak::cacheline_allocator<char>::alloc_size(size);
+
+  std::memcpy(tmp, buffer, bufferSize);
+  delete [] m_buffer;
+  m_buffer = tmp;
+}
+
 void
 SCgiTask::open(SCgi* parent, int fd) {
   m_parent   = parent;
   m_fileDesc = fd;
-  m_buffer   = new char[(m_bufferSize = default_buffer_size) + 1];
+  m_buffer   = rak::cacheline_allocator<char>::alloc_size((m_bufferSize = default_buffer_size) + 1);
   m_position = m_buffer;
   m_body     = NULL;
 
-  control->poll()->open(this);
-  control->poll()->insert_read(this);
-  control->poll()->insert_error(this);
+  worker_thread->poll()->open(this);
+  worker_thread->poll()->insert_read(this);
+  worker_thread->poll()->insert_error(this);
 
 //   scgiTimer = rak::timer::current();
 }
@@ -76,10 +88,10 @@ SCgiTask::close() {
   if (!get_fd().is_valid())
     return;
 
-  control->poll()->remove_read(this);
-  control->poll()->remove_write(this);
-  control->poll()->remove_error(this);
-  control->poll()->close(this);
+  worker_thread->poll()->remove_read(this);
+  worker_thread->poll()->remove_write(this);
+  worker_thread->poll()->remove_error(this);
+  worker_thread->poll()->close(this);
 
   get_fd().close();
   get_fd().clear();
@@ -142,7 +154,7 @@ SCgiTask::event_read() {
     if ((unsigned int)(contentSize + headerSize) < m_bufferSize) {
       m_bufferSize = contentSize + headerSize;
 
-    } else if ((unsigned int)(contentSize + headerSize) <= default_buffer_size) {
+    } else if ((unsigned int)contentSize <= default_buffer_size) {
       m_bufferSize = contentSize;
 
       std::memmove(m_buffer, m_body, std::distance(m_body, m_position));
@@ -150,21 +162,25 @@ SCgiTask::event_read() {
       m_body = m_buffer;
 
     } else {
-      char* tmp = new char[(m_bufferSize = contentSize)];
-      std::memcpy(tmp, m_body, std::distance(m_body, m_position));
-      delete [] m_buffer;
+      realloc_buffer((m_bufferSize = contentSize) + 1, m_body, std::distance(m_body, m_position));
 
-      m_position = tmp + std::distance(m_body, m_position);
-      m_buffer = tmp;
-      m_body = tmp;
+      m_position = m_buffer + std::distance(m_body, m_position);
+      m_body = m_buffer;
     }
   }
 
   if ((unsigned int)std::distance(m_buffer, m_position) != m_bufferSize)
     return;
 
-  control->poll()->remove_read(this);
-  control->poll()->insert_write(this);
+  worker_thread->poll()->remove_read(this);
+  worker_thread->poll()->insert_write(this);
+
+  if (m_parent->log_fd() >= 0) {
+    // Clean up logging, this is just plain ugly...
+    //    write(m_logFd, "\n---\n", sizeof("\n---\n"));
+    write(m_parent->log_fd(), m_buffer, m_bufferSize);
+    write(m_parent->log_fd(), "\n---\n", sizeof("\n---\n"));
+  }
 
   // Close if the call failed, else stay open to write back data.
   if (!m_parent->receive_call(this, m_body, m_bufferSize - std::distance(m_buffer, m_body)))
@@ -202,11 +218,12 @@ SCgiTask::event_error() {
 
 bool
 SCgiTask::receive_write(const char* buffer, uint32_t length) {
+  if (buffer == NULL || length > (100 << 20))
+    throw torrent::internal_error("SCgiTask::receive_write(...) received bad input.");
+
   // Need to cast due to a bug in MacOSX gcc-4.0.1.
-  if (length + 256 > std::max(m_bufferSize, (unsigned int)default_buffer_size)) {
-    delete [] m_buffer;
-    m_buffer = new char[length + 256];
-  }
+  if (length + 256 > std::max(m_bufferSize, (unsigned int)default_buffer_size))
+    realloc_buffer(length + 256, NULL, 0);
 
   // Who ever bothers to check the return value?
   int headerSize = sprintf(m_buffer, "Status: 200 OK\r\nContent-Type: text/xml\r\nContent-Length: %i\r\n\r\n", length);
@@ -215,8 +232,15 @@ SCgiTask::receive_write(const char* buffer, uint32_t length) {
   m_bufferSize = length + headerSize;
   
   std::memcpy(m_buffer + headerSize, buffer, length);
-  event_write();
 
+  if (m_parent->log_fd() >= 0) {
+    // Clean up logging, this is just plain ugly...
+    //    write(m_logFd, "\n---\n", sizeof("\n---\n"));
+    write(m_parent->log_fd(), m_buffer, m_bufferSize);
+    write(m_parent->log_fd(), "\n---\n", sizeof("\n---\n"));
+  }
+
+  event_write();
   return true;
 }
 

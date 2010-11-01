@@ -40,6 +40,7 @@
 #include <torrent/exceptions.h>
 #include <torrent/rate.h>
 #include <torrent/hash_string.h>
+#include <torrent/peer/connection_list.h>
 #include <torrent/peer/peer_info.h>
 
 #include "display/frame.h"
@@ -61,10 +62,11 @@ ElementPeerList::ElementPeerList(core::Download* d) :
 
   m_listItr = m_list.end();
 
-  m_download->download()->peer_list(m_list);
+  std::for_each(m_download->download()->connection_list()->begin(), m_download->download()->connection_list()->end(),
+                rak::bind1st(std::mem_fun<void,PList,PList::const_reference>(&PList::push_back), &m_list));
 
-  m_connPeerConnected    = m_download->download()->signal_peer_connected(sigc::mem_fun(*this, &ElementPeerList::receive_peer_connected));
-  m_connPeerDisconnected = m_download->download()->signal_peer_disconnected(sigc::mem_fun(*this, &ElementPeerList::receive_peer_disconnected));
+  m_connPeerConnected    = m_download->download()->connection_list()->signal_connected().connect(sigc::mem_fun(*this, &ElementPeerList::receive_peer_connected));
+  m_connPeerDisconnected = m_download->download()->connection_list()->signal_disconnected().connect(sigc::mem_fun(*this, &ElementPeerList::receive_peer_disconnected));
 
   m_windowList  = new display::WindowPeerList(m_download, &m_list, &m_listItr);
   m_elementInfo = create_info();
@@ -73,6 +75,7 @@ ElementPeerList::ElementPeerList(core::Download* d) :
 
   m_bindings['k']       = sigc::mem_fun(this, &ElementPeerList::receive_disconnect_peer);
   m_bindings['*']       = sigc::mem_fun(this, &ElementPeerList::receive_snub_peer);
+  m_bindings['B']       = sigc::mem_fun(this, &ElementPeerList::receive_ban_peer);
   m_bindings[KEY_LEFT] = m_bindings['B' - '@']  = sigc::mem_fun(&m_slotExit, &slot_type::operator());  
   m_bindings[KEY_RIGHT] = m_bindings['F' - '@'] = sigc::bind(sigc::mem_fun(this, &ElementPeerList::activate_display), DISPLAY_INFO);
 
@@ -100,18 +103,18 @@ ElementPeerList::create_info() {
   element->push_back("Peer info:");
 
   element->push_back("");
-  element->push_column("Address:",   te_command("cat=$p.get_address=,:,$p.get_port="));
-  element->push_column("Id:",        te_command("p.get_id_html="));
-  element->push_column("Client:",    te_command("p.get_client_version="));
-  element->push_column("Options:",   te_command("p.get_options_str="));
+  element->push_column("Address:",   te_command("cat=$p.address=,:,$p.port="));
+  element->push_column("Id:",        te_command("p.id_html="));
+  element->push_column("Client:",    te_command("p.client_version="));
+  element->push_column("Options:",   te_command("p.options_str="));
   element->push_column("Connected:", te_command("if=$p.is_incoming=,incoming,outgoing"));
   element->push_column("Encrypted:", te_command("if=$p.is_encrypted=,yes,$p.is_obfuscated=,handshake,no"));
 
   element->push_back("");
   element->push_column("Snubbed:",   te_command("if=$p.is_snubbed=,yes,no"));
-  element->push_column("Done:",      te_command("p.get_completed_percent="));
-  element->push_column("Rate:",      te_command("cat=$to_kb=$p.get_up_rate=,\\ KB\\ ,$to_kb=$p.get_down_rate=,\\ KB"));
-  element->push_column("Total:",     te_command("cat=$to_kb=$p.get_up_total=,\\ KB\\ ,$to_kb=$p.get_down_total=,\\ KB"));
+  element->push_column("Done:",      te_command("p.completed_percent="));
+  element->push_column("Rate:",      te_command("cat=$convert.kb=$p.up_rate=,\\ KB\\ ,$convert.kb=$p.down_rate=,\\ KB"));
+  element->push_column("Total:",     te_command("cat=$convert.kb=$p.up_total=,\\ KB\\ ,$convert.kb=$p.down_total=,\\ KB"));
 
   element->set_column_width(element->column_width() + 1);
   element->set_error_handler(new display::TextElementCString("No peer selected."));
@@ -209,16 +212,16 @@ ElementPeerList::receive_disconnect_peer() {
   if (m_listItr == m_list.end())
     return;
 
-  m_download->download()->disconnect_peer(*m_listItr);
+  m_download->connection_list()->erase(*m_listItr, 0);
 }
 
 void
-ElementPeerList::receive_peer_connected(torrent::Peer p) {
+ElementPeerList::receive_peer_connected(torrent::Peer* p) {
   m_list.push_back(p);
 }
 
 void
-ElementPeerList::receive_peer_disconnected(torrent::Peer p) {
+ElementPeerList::receive_peer_disconnected(torrent::Peer* p) {
   PList::iterator itr = std::find(m_list.begin(), m_list.end(), p);
 
   if (itr == m_list.end())
@@ -237,7 +240,18 @@ ElementPeerList::receive_snub_peer() {
   if (m_listItr == m_list.end())
     return;
 
-  m_listItr->set_snubbed(!m_listItr->is_snubbed());
+  (*m_listItr)->set_snubbed(!(*m_listItr)->is_snubbed());
+
+  update_itr();
+}
+
+void
+ElementPeerList::receive_ban_peer() {
+  if (m_listItr == m_list.end())
+    return;
+
+  (*m_listItr)->set_banned(true);
+  m_download->download()->connection_list()->erase(*m_listItr, torrent::ConnectionList::disconnect_quick);
 
   update_itr();
 }
@@ -245,7 +259,7 @@ ElementPeerList::receive_snub_peer() {
 void
 ElementPeerList::update_itr() {
   m_windowList->mark_dirty();
-  m_elementInfo->set_target(m_listItr != m_list.end() ? rpc::make_target(&*m_listItr) : rpc::make_target());
+  m_elementInfo->set_target(m_listItr != m_list.end() ? rpc::make_target(*m_listItr) : rpc::make_target());
 }
 
 }

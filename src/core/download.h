@@ -39,13 +39,16 @@
 
 #include <sigc++/connection.h>
 #include <torrent/download.h>
+#include <torrent/download_info.h>
 #include <torrent/hash_string.h>
 #include <torrent/tracker_list.h>
 #include <torrent/data/file_list.h>
+#include <torrent/peer/connection_list.h>
 
 #include "globals.h"
 
 namespace torrent {
+  class PeerList;
   class TrackerList;
 }
 
@@ -55,7 +58,9 @@ class Download {
 public:
   typedef torrent::Download             download_type;
   typedef torrent::FileList             file_list_type;
+  typedef torrent::PeerList             peer_list_type;
   typedef torrent::TrackerList          tracker_list_type;
+  typedef torrent::ConnectionList       connection_list_type;
   typedef download_type::ConnectionType connection_type;
 
   static const int variable_hashing_stopped = 0;
@@ -66,8 +71,10 @@ public:
   Download(download_type d);
   ~Download();
 
-  bool                is_open() const                          { return m_download.is_open(); }
-  bool                is_active() const                        { return m_download.is_active(); }
+  const torrent::DownloadInfo* info() const                             { return m_download.info(); }
+
+  bool                is_open() const                          { return m_download.info()->is_open(); }
+  bool                is_active() const                        { return m_download.info()->is_active(); }
   bool                is_done() const                          { return m_download.file_list()->is_done(); }
   bool                is_downloading() const                   { return is_active() && !is_done(); }
   bool                is_seeding() const                       { return is_active() && is_done(); }
@@ -75,7 +82,7 @@ public:
   // FIXME: Fixed a bug in libtorrent that caused is_hash_checked to
   // return true when the torrent is closed. Remove this redundant
   // test in the next milestone.
-  bool                is_hash_checked() const                  { return m_download.is_open() && m_download.is_hash_checked(); }
+  bool                is_hash_checked() const                  { return is_open() && m_download.is_hash_checked(); }
   bool                is_hash_checking() const                 { return m_download.is_hash_checking(); }
 
   bool                is_hash_failed() const                   { return m_hashFailed; }
@@ -87,8 +94,16 @@ public:
   file_list_type*       file_list()                            { return m_download.file_list(); }
   const file_list_type* c_file_list() const                    { return m_download.file_list(); }
 
+  peer_list_type*       peer_list()                            { return m_download.peer_list(); }
+  const peer_list_type* c_peer_list() const                    { return m_download.peer_list(); }
+
   torrent::Object*    bencode()                                { return m_download.bencode(); }
-  tracker_list_type*  tracker_list()                           { return &m_trackerList; }
+
+  tracker_list_type*  tracker_list()                           { return m_download.tracker_list(); }
+  uint32_t            tracker_list_size() const                { return m_download.tracker_list()->size(); }
+
+  connection_list_type* connection_list()                      { return m_download.connection_list(); }
+  uint32_t              connection_list_size() const;
 
   const std::string&  message() const                          { return m_message; }
   void                set_message(const std::string& msg)      { m_message = msg; }
@@ -105,6 +120,8 @@ public:
 
   void                set_root_directory(const std::string& path);
 
+  void                set_throttle_name(const std::string& throttleName);
+
   bool                operator == (const std::string& str) const;
 
   float               distributed_copies() const;
@@ -120,7 +137,6 @@ private:
 
   // Store the FileList instance so we can use slots etc on it.
   download_type       m_download;
-  tracker_list_type   m_trackerList;
 
   bool                m_hashFailed;
 
@@ -129,14 +145,14 @@ private:
 
   uint32_t            m_resumeFlags;
 
-  sigc::connection    m_connTrackerSucceded;
+  sigc::connection    m_connTrackerSucceeded;
   sigc::connection    m_connTrackerFailed;
   sigc::connection    m_connStorageError;
 };
 
 inline bool
 Download::operator == (const std::string& str) const {
-  return str.size() == torrent::HashString::size_data && *torrent::HashString::cast_from(str) == m_download.info_hash();
+  return str.size() == torrent::HashString::size_data && *torrent::HashString::cast_from(str) == m_download.info()->hash();
 }
 
 }

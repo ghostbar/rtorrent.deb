@@ -36,163 +36,144 @@
 
 #include "config.h"
 
+#include <vector>
 #include <torrent/exceptions.h>
 #include <torrent/object.h>
 #include <torrent/data/file_list_iterator.h>
 
+// Get better logging...
+#include "globals.h"
+#include "control.h"
+#include "core/manager.h"
+
 #include "command.h"
 #include "command_map.h"
 
+// For XMLRPC stuff, clean up.
+#include "xmlrpc.h"
+#include "parse_commands.h"
+
 namespace rpc {
 
+command_base::stack_type command_base::current_stack;
+
 CommandMap::~CommandMap() {
-  for (iterator itr = base_type::begin(), last = base_type::end(); itr != last; itr++)
-    if (!(itr->second.m_flags & flag_dont_delete))
-      delete itr->second.m_variable;
+  std::vector<const char*> keys;
+
+  for (iterator itr = base_type::begin(), last = base_type::end(); itr != last; itr++) {
+//     if (!(itr->second.m_flags & flag_dont_delete))
+//       delete itr->second.m_variable;
+
+    if (itr->second.m_flags & flag_delete_key)
+      keys.push_back(itr->first);
+  }
+
+  for (std::vector<const char*>::iterator itr = keys.begin(), last = keys.end(); itr != last; itr++)
+    delete [] *itr;
 }
 
 CommandMap::iterator
-CommandMap::insert(key_type key, Command* variable, int flags, const char* parm, const char* doc) {
+CommandMap::insert(key_type key, int flags, const char* parm, const char* doc) {
   iterator itr = base_type::find(key);
 
   if (itr != base_type::end())
     throw torrent::internal_error("CommandMap::insert(...) tried to insert an already existing key.");
 
-  return base_type::insert(itr, value_type(key, command_map_data_type(variable, flags, parm, doc)));
+  // TODO: This is not honoring the public_xmlrpc flags!!!
+  if (rpc::xmlrpc.is_valid() && (flags & flag_public_xmlrpc))
+  // if (rpc::xmlrpc.is_valid())
+    rpc::xmlrpc.insert_command(key, parm, doc);
+
+  return base_type::insert(itr, value_type(key, command_map_data_type(flags, parm, doc)));
 }
 
-// The functions below should be reduced to just one.
-void
-CommandMap::insert_generic(key_type key, Command* variable, generic_slot targetSlot, int flags, const char* parm, const char* doc) {
-  iterator itr = insert(key, variable, flags, parm, doc);
+// void
+// CommandMap::insert(key_type key, const command_map_data_type src) {
+//   iterator itr = base_type::find(key);
 
-  itr->second.m_target      = target_generic;
-  itr->second.m_genericSlot = targetSlot;
-}
+//   if (itr != base_type::end())
+//     throw torrent::internal_error("CommandMap::insert(...) tried to insert an already existing key.");
 
-void
-CommandMap::insert_any(key_type key, Command* variable, any_slot targetSlot, int flags, const char* parm, const char* doc) {
-  iterator itr = insert(key, variable, flags, parm, doc);
+//   itr = base_type::insert(itr, value_type(key, command_map_data_type(src.m_variable, src.m_flags | flag_dont_delete, src.m_parm, src.m_doc)));
 
-  itr->second.m_target      = target_any;
-  itr->second.m_anySlot = targetSlot;
-}
+//   // We can assume all the slots are the same size.
+//   itr->second.m_anySlot = src.m_anySlot;
+// }
 
 void
-CommandMap::insert_download(key_type key, Command* variable, download_slot targetSlot, int flags, const char* parm, const char* doc) {
-  iterator itr = insert(key, variable, flags, parm, doc);
+CommandMap::erase(iterator itr) {
+  if (itr == end())
+    return;
 
-  itr->second.m_target       = target_download;
-  itr->second.m_downloadSlot = targetSlot;
-}
+  // TODO: Remove the redirects instead...
+  if (itr->second.m_flags & flag_has_redirects)
+    throw torrent::input_error("Can't erase a command that has redirects.");
 
-void
-CommandMap::insert_peer(key_type key, Command* variable, peer_slot targetSlot, int flags, const char* parm, const char* doc) {
-  iterator itr = insert(key, variable, flags, parm, doc);
+//   if (!(itr->second.m_flags & flag_dont_delete))
+//     delete itr->second.m_variable;
 
-  itr->second.m_target   = target_peer;
-  itr->second.m_peerSlot = targetSlot;
-}
+  const char* key = itr->second.m_flags & flag_delete_key ? itr->first : NULL;
 
-void
-CommandMap::insert_tracker(key_type key, Command* variable, tracker_slot targetSlot, int flags, const char* parm, const char* doc) {
-  iterator itr = insert(key, variable, flags, parm, doc);
-
-  itr->second.m_target      = target_tracker;
-  itr->second.m_trackerSlot = targetSlot;
+  base_type::erase(itr);
+  delete [] key;
 }
 
 void
-CommandMap::insert_file(key_type key, Command* variable, file_slot targetSlot, int flags, const char* parm, const char* doc) {
-  iterator itr = insert(key, variable, flags, parm, doc);
+CommandMap::create_redirect(key_type key_new, key_type key_dest, int flags) {
+  iterator new_itr  = base_type::find(key_new);
+  iterator dest_itr = base_type::find(key_dest);
 
-  itr->second.m_target   = target_file;
-  itr->second.m_fileSlot = targetSlot;
+  if (dest_itr == base_type::end())
+    throw torrent::input_error("Tried to redirect to a key that doesn't exist: '" + std::string(key_dest) + "'.");
+  
+  if (new_itr != base_type::end())
+    throw torrent::input_error("Tried to create a redirect key that already exists: '" + std::string(key_new) + "'.");
+  
+  if (dest_itr->second.m_flags & flag_is_redirect)
+    throw torrent::input_error("Tried to redirect to a key that is not marked 'flag_is_redirect': '" +
+                               std::string(key_dest) + "'.");
+
+  dest_itr->second.m_flags |= flag_has_redirects;
+
+  flags |= dest_itr->second.m_flags & ~(flag_delete_key | flag_has_redirects | flag_public_xmlrpc);
+
+  // TODO: This is not honoring the public_xmlrpc flags!!!
+  if (rpc::xmlrpc.is_valid() && (flags & flag_public_xmlrpc))
+    rpc::xmlrpc.insert_command(key_new, dest_itr->second.m_parm, dest_itr->second.m_doc);
+
+  iterator itr = base_type::insert(base_type::end(),
+                                   value_type(key_new, command_map_data_type(flags,
+                                                                             dest_itr->second.m_parm,
+                                                                             dest_itr->second.m_doc)));
+
+  // We can assume all the slots are the same size.
+  itr->second.m_variable = dest_itr->second.m_variable;
+  itr->second.m_anySlot = dest_itr->second.m_anySlot;
 }
 
-void
-CommandMap::insert_file_itr(key_type key, Command* variable, file_itr_slot targetSlot, int flags, const char* parm, const char* doc) {
-  iterator itr = insert(key, variable, flags, parm, doc);
-
-  itr->second.m_target      = target_file_itr;
-  itr->second.m_fileItrSlot = targetSlot;
-}
-
-void
-CommandMap::insert(key_type key, const command_map_data_type src) {
-  iterator itr = base_type::find(key);
-
-  if (itr != base_type::end())
-    throw torrent::internal_error("CommandMap::insert(...) tried to insert an already existing key.");
-
-  itr = base_type::insert(itr, value_type(key, command_map_data_type(src.m_variable, src.m_flags | flag_dont_delete, src.m_parm, src.m_doc)));
-
-  itr->second.m_target       = src.m_target;
-
-  // This _should_ be optimized int just one assignment.
-  switch (itr->second.m_target) {
-  case target_generic:  itr->second.m_genericSlot  = src.m_genericSlot; break;
-  case target_any:      itr->second.m_anySlot      = src.m_anySlot; break;
-  case target_download: itr->second.m_downloadSlot = src.m_downloadSlot; break;
-  case target_file:     itr->second.m_fileSlot     = src.m_fileSlot; break;
-  case target_file_itr: itr->second.m_fileItrSlot  = src.m_fileItrSlot; break;
-  case target_peer:     itr->second.m_peerSlot     = src.m_peerSlot; break;
-  case target_tracker:  itr->second.m_trackerSlot  = src.m_trackerSlot; break;
-  default: throw torrent::internal_error("CommandMap::insert(...) Invalid target.");
+const CommandMap::mapped_type
+CommandMap::call_catch(key_type key, target_type target, const mapped_type& args, const char* err) {
+  try {
+    return call_command(key, args, target);
+  } catch (torrent::input_error& e) {
+    control->core()->push_log((err + std::string(e.what())).c_str());
+    return torrent::Object();
   }
 }
 
 const CommandMap::mapped_type
 CommandMap::call_command(key_type key, const mapped_type& arg, target_type target) {
-  const_iterator itr = base_type::find(key);
+  iterator itr = base_type::find(key);
 
   if (itr == base_type::end())
     throw torrent::input_error("Command \"" + std::string(key) + "\" does not exist.");
 
-  if (target.second == NULL &&
-      itr->second.m_target != target_generic &&
-      !(itr->second.m_target == target_any && target.first == target_generic))
-    throw torrent::input_error("Command type mis-match.");
-
-  if (itr->second.m_target != target.first && itr->second.m_target > target_any) {
-    // Mismatch between the target and command type. If it is not
-    // possible to convert, then throw an input error.
-    if (target.first == target_file_itr && itr->second.m_target == target_file)
-      target = target_type((int)target_file, static_cast<torrent::FileListIterator*>(target.second)->file());
-    else
-      throw torrent::input_error("Command type mis-match.");
-  }
-
-  // This _should_ be optimized int just two calls.
-  switch (itr->second.m_target) {
-  case target_generic:  return itr->second.m_genericSlot (itr->second.m_variable, arg);
-  case target_any:      return itr->second.m_anySlot     (itr->second.m_variable, target, arg);
-  case target_download: return itr->second.m_downloadSlot(itr->second.m_variable, (core::Download*)target.second, arg);
-  case target_peer:     return itr->second.m_peerSlot    (itr->second.m_variable, (torrent::Peer*)target.second, arg);
-  case target_tracker:  return itr->second.m_trackerSlot (itr->second.m_variable, (torrent::Tracker*)target.second, arg);
-  case target_file:     return itr->second.m_fileSlot    (itr->second.m_variable, (torrent::File*)target.second, arg);
-  case target_file_itr: return itr->second.m_fileItrSlot (itr->second.m_variable, (torrent::FileListIterator*)target.second, arg);
-  default: throw torrent::internal_error("CommandMap::call_command(...) Invalid target.");
-  }
+  return itr->second.m_anySlot(&itr->second.m_variable, target, arg);
 }
 
 const CommandMap::mapped_type
-CommandMap::call_command(const_iterator itr, const mapped_type& arg, target_type target) {
-  if ((itr->second.m_target != target.first && itr->second.m_target > target_any) ||
-      (target.second == NULL && itr->second.m_target != target_generic && !(itr->second.m_target == target_any && target.first == target_generic)))
-    throw torrent::input_error("Command type mis-match.");
-
-  // This _should_ be optimized int just two calls.
-  switch (itr->second.m_target) {
-  case target_generic:  return itr->second.m_genericSlot (itr->second.m_variable, arg);
-  case target_any:      return itr->second.m_anySlot     (itr->second.m_variable, target, arg);
-  case target_download: return itr->second.m_downloadSlot(itr->second.m_variable, (core::Download*)target.second, arg);
-  case target_peer:     return itr->second.m_peerSlot    (itr->second.m_variable, (torrent::Peer*)target.second, arg);
-  case target_tracker:  return itr->second.m_trackerSlot (itr->second.m_variable, (torrent::Tracker*)target.second, arg);
-  case target_file:     return itr->second.m_fileSlot    (itr->second.m_variable, (torrent::File*)target.second, arg);
-  case target_file_itr: return itr->second.m_fileItrSlot (itr->second.m_variable, (torrent::FileListIterator*)target.second, arg);
-  default: throw torrent::internal_error("CommandMap::call_command(...) Invalid target.");
-  }
+CommandMap::call_command(iterator itr, const mapped_type& arg, target_type target) {
+  return itr->second.m_anySlot(&itr->second.m_variable, target, arg);
 }
 
 }

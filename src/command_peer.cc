@@ -42,6 +42,7 @@
 #include <rak/string_manip.h>
 #include <torrent/bitfield.h>
 #include <torrent/rate.h>
+#include <torrent/peer/connection_list.h>
 #include <torrent/peer/peer.h>
 #include <torrent/peer/peer_info.h>
 
@@ -68,25 +69,25 @@ retrieve_p_id_html(torrent::Peer* peer) {
 
 torrent::Object
 retrieve_p_address(torrent::Peer* peer) {
-  return rak::socket_address::cast_from(peer->info()->socket_address())->address_str();
+  return rak::socket_address::cast_from(peer->peer_info()->socket_address())->address_str();
 }
 
 torrent::Object
 retrieve_p_port(torrent::Peer* peer) {
-  return rak::socket_address::cast_from(peer->info()->socket_address())->port();
+  return rak::socket_address::cast_from(peer->peer_info()->socket_address())->port();
 }
 
 torrent::Object
 retrieve_p_client_version(torrent::Peer* peer) {
   char buf[128];
-  display::print_client_version(buf, buf + 128, peer->info()->client_info());
+  display::print_client_version(buf, buf + 128, peer->peer_info()->client_info());
 
   return std::string(buf);
 }
 
 torrent::Object
 retrieve_p_options_str(torrent::Peer* peer) {
-  return rak::transform_hex(peer->info()->options(), peer->info()->options() + 8);
+  return rak::transform_hex(peer->peer_info()->options(), peer->peer_info()->options() + 8);
 }
 
 torrent::Object
@@ -94,55 +95,36 @@ retrieve_p_completed_percent(torrent::Peer* peer) {
   return (100 * peer->bitfield()->size_set()) / peer->bitfield()->size_bits();
 }
 
-#define ADD_CP_SLOT(key, function, slot, parm, doc)    \
-  commandPeerSlotsItr->set_slot(slot); \
-  rpc::commands.insert_peer(key, commandPeerSlotsItr++, &rpc::CommandSlot<torrent::Peer*>::function, rpc::CommandMap::flag_dont_delete, parm, doc);
-
-#define ADD_CP_SLOT_PUBLIC(key, function, slot, parm, doc)    \
-  commandPeerSlotsItr->set_slot(slot); \
-  rpc::commands.insert_peer(key, commandPeerSlotsItr++, &rpc::CommandSlot<torrent::Peer*>::function, rpc::CommandMap::flag_dont_delete | rpc::CommandMap::flag_public_xmlrpc, parm, doc);
-
-#define ADD_CP_VOID(key, slot) \
-  ADD_CP_SLOT_PUBLIC("p.get_" key, call_unknown, rpc::object_fn(slot), "i:", "")
-
-#define ADD_CP_VALUE(key, get) \
-  ADD_CP_SLOT_PUBLIC("p." key, call_unknown, rpc::object_void_fn<torrent::Peer*>(get), "i:", "")
-
-#define ADD_CP_VALUE_UNI(key, get) \
-  ADD_CP_SLOT_PUBLIC("p.get_" key, call_unknown, rpc::object_void_fn<torrent::Peer*>(get), "i:", "")
-
-#define ADD_CP_VALUE_BI(key, set, get) \
-  ADD_CP_SLOT_PUBLIC("p.set_" key, call_value, rpc::object_value_fn<torrent::Peer*>(set), "i:i", "") \
-  ADD_CP_SLOT_PUBLIC("p.get_" key, call_unknown, rpc::object_void_fn<torrent::Peer*>(get), "i:", "")
-
-#define ADD_CP_VALUE_MEM_UNI(key, target, get) \
-  ADD_CP_SLOT_PUBLIC("p.get_" key, call_unknown, rpc::object_void_fn<torrent::Peer*>(rak::on(std::mem_fun(target), std::mem_fun(get))), "i:", "");
-
-#define ADD_CP_STRING_UNI(key, get) \
-  ADD_CP_SLOT_PUBLIC("p.get_" key, call_unknown, rpc::object_void_fn<torrent::Peer*>(get), "s:", "")
-
 void
 initialize_command_peer() {
-  ADD_CP_STRING_UNI("id",                 std::ptr_fun(&retrieve_p_id));
-  ADD_CP_STRING_UNI("id_html",            std::ptr_fun(&retrieve_p_id_html));
-  ADD_CP_STRING_UNI("client_version",     std::ptr_fun(&retrieve_p_client_version));
+  CMD2_PEER("p.id",                std::tr1::bind(&retrieve_p_id, std::tr1::placeholders::_1));
+  CMD2_PEER("p.id_html",           std::tr1::bind(&retrieve_p_id_html, std::tr1::placeholders::_1));
+  CMD2_PEER("p.client_version",    std::tr1::bind(&retrieve_p_client_version, std::tr1::placeholders::_1));
 
-  ADD_CP_STRING_UNI("options_str",        std::ptr_fun(&retrieve_p_options_str));
+  CMD2_PEER("p.options_str",       std::tr1::bind(&retrieve_p_options_str, std::tr1::placeholders::_1));
 
-  ADD_CP_VALUE("is_encrypted",            std::mem_fun(&torrent::Peer::is_encrypted));
-  ADD_CP_VALUE("is_incoming",             std::mem_fun(&torrent::Peer::is_incoming));
-  ADD_CP_VALUE("is_obfuscated",           std::mem_fun(&torrent::Peer::is_obfuscated));
-  ADD_CP_VALUE("is_snubbed",              std::mem_fun(&torrent::Peer::is_snubbed));
+  CMD2_PEER("p.is_encrypted",      std::tr1::bind(&torrent::Peer::is_encrypted, std::tr1::placeholders::_1));
+  CMD2_PEER("p.is_incoming",       std::tr1::bind(&torrent::Peer::is_incoming, std::tr1::placeholders::_1));
+  CMD2_PEER("p.is_obfuscated",     std::tr1::bind(&torrent::Peer::is_obfuscated, std::tr1::placeholders::_1));
+  CMD2_PEER("p.is_snubbed",        std::tr1::bind(&torrent::Peer::is_snubbed, std::tr1::placeholders::_1));
 
-  ADD_CP_STRING_UNI("address",            std::ptr_fun(&retrieve_p_address));
-  ADD_CP_VALUE_UNI("port",                std::ptr_fun(&retrieve_p_port));
+  CMD2_PEER("p.address",           std::tr1::bind(&retrieve_p_address, std::tr1::placeholders::_1));
+  CMD2_PEER("p.port",              std::tr1::bind(&retrieve_p_port, std::tr1::placeholders::_1));
 
-  ADD_CP_VALUE_UNI("completed_percent",   std::ptr_fun(&retrieve_p_completed_percent));
+  CMD2_PEER("p.completed_percent", std::tr1::bind(&retrieve_p_completed_percent, std::tr1::placeholders::_1));
 
-  ADD_CP_VALUE_MEM_UNI("up_rate",         &torrent::Peer::up_rate, &torrent::Rate::rate);
-  ADD_CP_VALUE_MEM_UNI("up_total",        &torrent::Peer::up_rate, &torrent::Rate::total);
-  ADD_CP_VALUE_MEM_UNI("down_rate",       &torrent::Peer::down_rate, &torrent::Rate::rate);
-  ADD_CP_VALUE_MEM_UNI("down_total",      &torrent::Peer::down_rate, &torrent::Rate::total);
-  ADD_CP_VALUE_MEM_UNI("peer_rate",       &torrent::Peer::peer_rate, &torrent::Rate::rate);
-  ADD_CP_VALUE_MEM_UNI("peer_total",      &torrent::Peer::peer_rate, &torrent::Rate::total);
+  CMD2_PEER("p.up_rate",           std::tr1::bind(&torrent::Rate::rate,  std::tr1::bind(&torrent::Peer::up_rate, std::tr1::placeholders::_1)));
+  CMD2_PEER("p.up_total",          std::tr1::bind(&torrent::Rate::total, std::tr1::bind(&torrent::Peer::up_rate, std::tr1::placeholders::_1)));
+  CMD2_PEER("p.down_rate",         std::tr1::bind(&torrent::Rate::rate,  std::tr1::bind(&torrent::Peer::down_rate, std::tr1::placeholders::_1)));
+  CMD2_PEER("p.down_total",        std::tr1::bind(&torrent::Rate::total, std::tr1::bind(&torrent::Peer::down_rate, std::tr1::placeholders::_1)));
+  CMD2_PEER("p.peer_rate",         std::tr1::bind(&torrent::Rate::rate,  std::tr1::bind(&torrent::Peer::peer_rate, std::tr1::placeholders::_1)));
+  CMD2_PEER("p.peer_total",        std::tr1::bind(&torrent::Rate::total, std::tr1::bind(&torrent::Peer::peer_rate, std::tr1::placeholders::_1)));
+
+  CMD2_PEER        ("p.snubbed",     std::tr1::bind(&torrent::Peer::is_snubbed,  std::tr1::placeholders::_1));
+  CMD2_PEER_VALUE_V("p.snubbed.set", std::tr1::bind(&torrent::Peer::set_snubbed, std::tr1::placeholders::_1, std::tr1::placeholders::_2));
+  CMD2_PEER        ("p.banned",      std::tr1::bind(&torrent::Peer::is_banned,   std::tr1::placeholders::_1));
+  CMD2_PEER_VALUE_V("p.banned.set",  std::tr1::bind(&torrent::Peer::set_banned,  std::tr1::placeholders::_1, std::tr1::placeholders::_2));
+
+  CMD2_PEER_V("p.disconnect",         std::tr1::bind(&torrent::Peer::disconnect, std::tr1::placeholders::_1, 0));
+  CMD2_PEER_V("p.disconnect_delayed", std::tr1::bind(&torrent::Peer::disconnect, std::tr1::placeholders::_1, torrent::ConnectionList::disconnect_delayed));
 }

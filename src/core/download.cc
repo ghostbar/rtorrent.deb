@@ -58,25 +58,23 @@ namespace core {
 
 Download::Download(download_type d) :
   m_download(d),
-  m_trackerList(d.tracker_list()),
-
   m_hashFailed(false),
 
   m_chunksFailed(0),
   m_resumeFlags(~uint32_t()) {
 
-  m_connTrackerSucceded = m_download.signal_tracker_succeded(sigc::bind(sigc::mem_fun(*this, &Download::receive_tracker_msg), ""));
-  m_connTrackerFailed   = m_download.signal_tracker_failed(sigc::mem_fun(*this, &Download::receive_tracker_msg));
-  m_connStorageError    = m_download.signal_storage_error(sigc::mem_fun(*this, &Download::receive_storage_error));
+  m_connTrackerSucceeded = m_download.info()->signal_tracker_success().connect(sigc::bind(sigc::mem_fun(*this, &Download::receive_tracker_msg), ""));
+  m_connTrackerFailed   = m_download.info()->signal_tracker_failed().connect(sigc::mem_fun(*this, &Download::receive_tracker_msg));
+  m_connStorageError    = m_download.info()->signal_storage_error().connect(sigc::mem_fun(*this, &Download::receive_storage_error));
 
-  m_download.signal_chunk_failed(sigc::mem_fun(*this, &Download::receive_chunk_failed));
+  m_download.info()->signal_chunk_failed().connect(sigc::mem_fun(*this, &Download::receive_chunk_failed));
 }
 
 Download::~Download() {
   if (!m_download.is_valid())
     return;
 
-  m_connTrackerSucceded.disconnect();
+  m_connTrackerSucceeded.disconnect();
   m_connTrackerFailed.disconnect();
   m_connStorageError.disconnect();
 
@@ -85,14 +83,13 @@ Download::~Download() {
 
 void
 Download::enable_udp_trackers(bool state) {
-  torrent::TrackerList tl = m_download.tracker_list();
-
-  for (int i = 0, last = tl.size(); i < last; ++i)
-    if (tl.get(i).tracker_type() == torrent::Tracker::TRACKER_UDP)
+  for (torrent::TrackerList::iterator itr = m_download.tracker_list()->begin(), last = m_download.tracker_list()->end(); itr != last; ++itr)
+    if ((*itr)->type() == torrent::Tracker::TRACKER_UDP) {
       if (state)
-        tl.get(i).enable();
+        (*itr)->enable();
       else
-        tl.get(i).disable();
+        (*itr)->disable();
+    }
 }
 
 uint32_t
@@ -102,8 +99,7 @@ Download::priority() {
 
 void
 Download::set_priority(uint32_t p) {
-  if (p >= 4)
-    throw torrent::input_error("Priority out of range.");
+  p %= 4;
 
   // Seeding torrents get half the priority of unfinished torrents.
   if (!is_done())
@@ -112,6 +108,11 @@ Download::set_priority(uint32_t p) {
     torrent::download_set_priority(m_download, p * p);
 
   bencode()->get_key("rtorrent").insert_key("priority", (int64_t)p);
+}
+
+uint32_t
+Download::connection_list_size() const {
+  return m_download.connection_list()->size();
 }
 
 void
@@ -130,7 +131,7 @@ Download::receive_storage_error(std::string msg) {
 float
 Download::distributed_copies() const {
   const uint8_t* avail = m_download.chunks_seen();
-  const uint8_t* end = avail + m_download.file_list()->size_chunks();
+  const torrent::Bitfield* bitfield = m_download.file_list()->bitfield();
 
   if (avail == NULL)
     return 0;
@@ -138,15 +139,17 @@ Download::distributed_copies() const {
   int minAvail = std::numeric_limits<uint8_t>::max();
   int num = 0;
 
-  for (; avail < end; ++avail)
-    if (*avail == minAvail) {
+  for (uint32_t i = m_download.file_list()->size_chunks(); i-- > 0; ) {
+    int totAvail = (int)avail[i] + bitfield->get(i);
+    if (totAvail == minAvail) {
       num++;
-    } else if (*avail < minAvail) {
-      minAvail = *avail;
+    } else if (totAvail < minAvail) {
+      minAvail = totAvail;
       num = 1;
     }
+  }
 
-  return minAvail + 1 - (float)num / m_download.file_list()->size_chunks();
+  return minAvail + 1 - bitfield->is_all_set() - (float)num / m_download.file_list()->size_chunks();
 }
 
 void
@@ -154,23 +157,24 @@ Download::receive_chunk_failed(__UNUSED uint32_t idx) {
   m_chunksFailed++;
 }
 
-// Clean up.
+void
+Download::set_throttle_name(const std::string& throttleName) {
+  if (m_download.info()->is_active())
+    throw torrent::input_error("Cannot set throttle on active download.");
+
+  torrent::ThrottlePair throttles = control->core()->get_throttle(throttleName);
+  m_download.set_upload_throttle(throttles.first);
+  m_download.set_download_throttle(throttles.second);
+
+  m_download.bencode()->get_key("rtorrent").insert_key("throttle_name", throttleName);
+}
+
 void
 Download::set_root_directory(const std::string& path) {
   torrent::FileList* fileList = m_download.file_list();
 
   control->core()->download_list()->close_directly(this);
-
-  if (path.empty()) {
-    fileList->set_root_dir("./" + (fileList->is_multi_file() ? m_download.name() : std::string()));
-
-  } else {
-    std::string fullPath = rak::path_expand(path);
-
-    fileList->set_root_dir(fullPath +
-                           (*fullPath.rbegin() != '/' ? "/" : "") +
-                           (fileList->is_multi_file() ? m_download.name() : std::string()));
-  }
+  fileList->set_root_dir(rak::path_expand(path));
 
   bencode()->get_key("rtorrent").insert_key("directory", path);
 }

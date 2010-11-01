@@ -37,10 +37,12 @@
 #include "config.h"
 
 #include <algorithm>
+#include <fstream>
 #include <iostream>
 #include <sigc++/adaptors/bind.h>
 #include <rak/functional.h>
 #include <rak/string_manip.h>
+#include <torrent/data/file.h>
 #include <torrent/exceptions.h>
 #include <torrent/download.h>
 #include <torrent/hash_string.h>
@@ -54,7 +56,10 @@
 #include "control.h"
 #include "globals.h"
 #include "manager.h"
+#include "view.h"
+#include "view_manager.h"
 
+#include "dht_manager.h"
 #include "download.h"
 #include "download_list.h"
 #include "download_store.h"
@@ -69,20 +74,6 @@ DownloadList::check_contains(Download* d) {
 #endif
 }
 
-struct download_list_call {
-  download_list_call(Download* d) : m_download(d) {}
-
-  void operator () (const DownloadList::slot_map::value_type& s) {
-    try {
-      s.second(m_download);
-    } catch (torrent::input_error& e) {
-      control->core()->push_log((std::string("Download event action failed: ") + e.what()).c_str());
-    }
-  }
-
-  Download* m_download;
-};    
-
 void
 DownloadList::clear() {
   std::for_each(begin(), end(), std::bind1st(std::mem_fun(&DownloadList::close), this));
@@ -93,12 +84,17 @@ DownloadList::clear() {
 
 void
 DownloadList::session_save() {
-  std::for_each(begin(), end(), std::bind1st(std::mem_fun(&DownloadStore::save), control->core()->download_store()));
+  unsigned int c = std::count_if(begin(), end(), std::bind1st(std::mem_fun(&DownloadStore::save_resume), control->core()->download_store()));
+
+  if (c != size())
+    control->core()->push_log("Failed to save session torrents.");
+
+  control->dht_manager()->save_dht_cache();
 }
 
 DownloadList::iterator
 DownloadList::find(const torrent::HashString& hash) {
-  return std::find_if(begin(), end(), rak::equal(hash, rak::on(std::mem_fun(&Download::download), std::mem_fun(&torrent::Download::info_hash))));
+  return std::find_if(begin(), end(), rak::equal(hash, rak::on(std::mem_fun(&Download::info), std::mem_fun(&torrent::DownloadInfo::hash))));
 }
 
 DownloadList::iterator
@@ -108,7 +104,7 @@ DownloadList::find_hex(const char* hash) {
   for (torrent::HashString::iterator itr = key.begin(), last = key.end(); itr != last; itr++, hash += 2)
     *itr = (rak::hexchar_to_value(*hash) << 4) + rak::hexchar_to_value(*(hash + 1));
 
-  return std::find_if(begin(), end(), rak::equal(key, rak::on(std::mem_fun(&Download::download), std::mem_fun(&torrent::Download::info_hash))));
+  return std::find_if(begin(), end(), rak::equal(key, rak::on(std::mem_fun(&Download::info), std::mem_fun(&torrent::DownloadInfo::hash))));
 }
 
 Download*
@@ -116,6 +112,27 @@ DownloadList::find_hex_ptr(const char* hash) {
   iterator itr = find_hex(hash);
 
   return itr != end() ? *itr : NULL;
+}
+
+Download*
+DownloadList::create(torrent::Object* obj, bool printLog) {
+  torrent::Download download;
+
+  try {
+    download = torrent::download_add(obj);
+
+  } catch (torrent::local_error& e) {
+    delete obj;
+
+    if (printLog)
+      control->core()->push_log(e.what());
+
+    return NULL;
+  }
+
+  // There's no non-critical exceptions that should be throwable by
+  // the ctor, so don't catch.
+  return new Download(download);
 }
 
 Download*
@@ -158,10 +175,15 @@ DownloadList::insert(Download* download) {
   iterator itr = base_type::insert(end(), download);
 
   try {
-    (*itr)->download()->signal_download_done(sigc::bind(sigc::mem_fun(*this, &DownloadList::received_finished), download));
-    (*itr)->download()->signal_hash_done(sigc::bind(sigc::mem_fun(*this, &DownloadList::hash_done), download));
+    (*itr)->info()->signal_download_done().connect(sigc::bind(sigc::mem_fun(*this, &DownloadList::received_finished), download));
+    (*itr)->info()->signal_initial_hash().connect(sigc::bind(sigc::mem_fun(*this, &DownloadList::hash_done), download));
 
-    std::for_each(slot_map_insert().begin(), slot_map_insert().end(), download_list_call(*itr));
+    // This needs to be separated into two different calls to ensure
+    // the download remains in the view.
+    std::for_each(control->view_manager()->begin(), control->view_manager()->end(), std::bind2nd(std::mem_fun(&View::insert), download));
+    std::for_each(control->view_manager()->begin(), control->view_manager()->end(), std::bind2nd(std::mem_fun(&View::filter_download), download));
+
+    rpc::commands.call_catch("event.download.inserted", rpc::make_target(*itr), torrent::Object(), "Download event action failed: ");
 
   } catch (torrent::local_error& e) {
     // Should perhaps relax this, just print an error and remove the
@@ -189,7 +211,8 @@ DownloadList::erase(iterator itr) {
 
   control->core()->download_store()->remove(*itr);
 
-  std::for_each(slot_map_erase().begin(), slot_map_erase().end(), download_list_call(*itr));
+  rpc::commands.call_catch("event.download.erased", rpc::make_target(*itr), torrent::Object(), "Download event action failed: ");
+  std::for_each(control->view_manager()->begin(), control->view_manager()->end(), std::bind2nd(std::mem_fun(&View::erase), *itr));
 
   torrent::download_remove(*(*itr)->download());
   delete *itr;
@@ -215,12 +238,16 @@ void
 DownloadList::open_throw(Download* download) {
   check_contains(download);
 
-  if (download->download()->is_open())
+  if (download->download()->info()->is_open())
     return;
   
-  download->download()->open();
+  int openFlags = download->resume_flags();
 
-  std::for_each(slot_map_open().begin(), slot_map_open().end(), download_list_call(download));
+  if (rpc::call_command_value("system.file.allocate"))
+    openFlags |= torrent::Download::open_enable_fallocate;
+
+  download->download()->open(openFlags);
+  rpc::commands.call_catch("event.download.opened", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
 }
 
 void
@@ -234,30 +261,16 @@ DownloadList::close(Download* download) {
   }
 }
 
-bool
-DownloadList::close_try(Download* download) {
-  try {
-    if (rpc::call_command_value("d.get_ignore_commands", rpc::make_target(download)) != 0)
-      return false;
-
-    rpc::call_command("d.set_state", (int64_t)0, rpc::make_target(download));
-    close_throw(download);
-    return true;
-
-  } catch (torrent::local_error& e) {
-    control->core()->push_log(e.what());
-    return false;
-  }
-}
-
 void
 DownloadList::close_directly(Download* download) {
-  if (download->download()->is_active()) {
-    download->download()->stop2(torrent::Download::stop_skip_tracker);
-    torrent::resume_save_progress(*download->download(), download->download()->bencode()->get_key("libtorrent_resume"));
+  if (download->download()->info()->is_active()) {
+    download->download()->stop(torrent::Download::stop_skip_tracker);
+
+    if (torrent::resume_check_target_files(*download->download(), download->download()->bencode()->get_key("libtorrent_resume")))
+      torrent::resume_save_progress(*download->download(), download->download()->bencode()->get_key("libtorrent_resume"));
   }
 
-  if (download->download()->is_open())
+  if (download->download()->info()->is_open())
     download->download()->close();
 }
 
@@ -269,7 +282,7 @@ DownloadList::close_quick(Download* download) {
   // handled by some parameter to the close function, or some other
   // way of giving the client more control of when STOPPED requests
   // are sent.
-  download->download()->tracker_list().manual_cancel();
+  download->download()->tracker_list()->manual_cancel();
 }
 
 void
@@ -296,63 +309,11 @@ DownloadList::close_throw(Download* download) {
 
   download->download()->close();
 
-  if (!download->is_hash_failed() && rpc::call_command_value("d.get_hashing", rpc::make_target(download)) != Download::variable_hashing_stopped)
+  if (!download->is_hash_failed() && rpc::call_command_value("d.hashing", rpc::make_target(download)) != Download::variable_hashing_stopped)
     throw torrent::internal_error("DownloadList::close_throw(...) called but we're going into a hashing loop.");
 
-  std::for_each(slot_map_hash_removed().begin(), slot_map_hash_removed().end(), download_list_call(download));
-  std::for_each(slot_map_close().begin(), slot_map_close().end(), download_list_call(download));
-}
-
-void
-DownloadList::start_normal(Download* download) {
-  check_contains(download);
-
-  // Clear hash failed as we're doing a manual start and want to try
-  // hashing again.
-  download->set_hash_failed(false);
-  rpc::call_command("d.set_state", (int64_t)1, rpc::make_target(download));
-
-  resume(download);
-}
-
-bool
-DownloadList::start_try(Download* download) {
-  check_contains(download);
-
-  // Also don't start if the state is one of those that indicate we
-  // were manually stopped?
-
-  if (download->is_hash_failed() || rpc::call_command_value("d.get_ignore_commands", rpc::make_target(download)) != 0)
-    return false;
-
-  // Don't clear the hash failed as this function is used by scripts,
-  // etc.
-  rpc::call_command("d.set_state", (int64_t)1, rpc::make_target(download));
-
-  resume(download);
-  return true;
-}
-
-void
-DownloadList::stop_normal(Download* download) {
-  check_contains(download);
-
-  rpc::call_command("d.set_state", (int64_t)0, rpc::make_target(download));
-
-  pause(download);
-}
-
-bool
-DownloadList::stop_try(Download* download) {
-  check_contains(download);
-
-  if (rpc::call_command_value("d.get_ignore_commands", rpc::make_target(download)) != 0)
-    return false;
-
-  rpc::call_command("d.set_state", (int64_t)0, rpc::make_target(download));
-
-  pause(download);
-  return true;
+  rpc::commands.call_catch("event.download.hash_removed", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
+  rpc::commands.call_catch("event.download.closed", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
 }
 
 void
@@ -361,8 +322,10 @@ DownloadList::resume(Download* download, int flags) {
 
   try {
 
-    if (download->download()->is_active())
+    if (download->download()->info()->is_active())
       return;
+
+    rpc::parse_command_single(rpc::make_target(download), "view.set_visible=active");
 
     // We need to make sure the flags aren't reset if someone decideds
     // to call resume() while it is hashing, etc.
@@ -380,38 +343,45 @@ DownloadList::resume(Download* download, int flags) {
       if (download->is_hash_failed())
         return;
 
-      if (rpc::call_command_value("d.get_hashing", rpc::make_target(download)) == Download::variable_hashing_stopped)
-        rpc::call_command("d.set_hashing", Download::variable_hashing_initial, rpc::make_target(download));
+      if (rpc::call_command_value("d.hashing", rpc::make_target(download)) == Download::variable_hashing_stopped)
+        rpc::call_command("d.hashing.set", Download::variable_hashing_initial, rpc::make_target(download));
 
-      std::for_each(slot_map_hash_queued().begin(), slot_map_hash_queued().end(), download_list_call(download));
+      rpc::commands.call_catch("event.download.hash_queued", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
       return;
     }
 
     // This will never actually do anything due to the above hash check.
     // open_throw(download);
 
-    rpc::call_command("d.set_state_changed", cachedTime.seconds(), rpc::make_target(download));
+    rpc::call_command("d.state_changed.set", cachedTime.seconds(), rpc::make_target(download));
+    rpc::call_command("d.state_counter.set", rpc::call_command_value("d.state_counter", rpc::make_target(download)) + 1, rpc::make_target(download));
 
     if (download->is_done()) {
-      rpc::call_command("d.set_connection_current", rpc::call_command_void("d.get_connection_seed", rpc::make_target(download)), rpc::make_target(download));
+      rpc::call_command("d.connection_current.set", rpc::call_command_void("d.connection_seed", rpc::make_target(download)), rpc::make_target(download));
     } else {
-      rpc::call_command("d.set_connection_current", rpc::call_command_void("d.get_connection_leech", rpc::make_target(download)), rpc::make_target(download));
+      rpc::call_command("d.connection_current.set", rpc::call_command_void("d.connection_leech", rpc::make_target(download)), rpc::make_target(download));
 
       // For the moment, clear the resume data so we force hash-check
       // on non-complete downloads after a crash. This shouldn't be
       // needed, but for some reason linux 2.6 is very lazy about
       // updating mtime.
-      torrent::resume_save_progress(*download->download(), download->download()->bencode()->get_key("libtorrent_resume"), true);
+      //
+      // Disabling this due to the new resume code.
+      //      torrent::resume_save_progress(*download->download(), download->download()->bencode()->get_key("libtorrent_resume"), true);
     }
+
+    // If the DHT server is set to auto, start it now.
+    if (!download->download()->info()->is_private())
+      control->dht_manager()->auto_start();
 
     // Update the priority to ensure it has the correct
     // seeding/unfinished modifiers.
     download->set_priority(download->priority());
-    download->download()->start2(download->resume_flags());
+    download->download()->start(download->resume_flags());
 
     download->set_resume_flags(~uint32_t());
 
-    std::for_each(slot_map_start().begin(), slot_map_start().end(), download_list_call(download));
+    rpc::commands.call_catch("event.download.resumed", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
 
   } catch (torrent::local_error& e) {
     control->core()->push_log(e.what());
@@ -426,24 +396,35 @@ DownloadList::pause(Download* download, int flags) {
 
     download->set_resume_flags(~uint32_t());
 
+    rpc::parse_command_single(rpc::make_target(download), "view.set_not_visible=active");
+
     // Always clear hashing on pause. When a hashing request is added,
     // it should have cleared the hash resume data.
-    if (rpc::call_command_value("d.get_hashing", rpc::make_target(download)) != Download::variable_hashing_stopped) {
+    if (rpc::call_command_value("d.hashing", rpc::make_target(download)) != Download::variable_hashing_stopped) {
       download->download()->hash_stop();
-      rpc::call_command_set_value("d.set_hashing", Download::variable_hashing_stopped, rpc::make_target(download));
+      rpc::call_command_set_value("d.hashing.set", Download::variable_hashing_stopped, rpc::make_target(download));
 
-      std::for_each(slot_map_hash_removed().begin(), slot_map_hash_removed().end(), download_list_call(download));
+      rpc::commands.call_catch("event.download.hash_removed", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
     }
 
-    if (!download->download()->is_active())
+    if (!download->download()->info()->is_active())
       return;
 
-    download->download()->stop2(flags);
+    download->download()->stop(flags);
     torrent::resume_save_progress(*download->download(), download->download()->bencode()->get_key("libtorrent_resume"));
     
-    std::for_each(slot_map_stop().begin(), slot_map_stop().end(), download_list_call(download));
+    // TODO: This is actually for pause, not stop... And doesn't get
+    // called when the download isn't active, but was in the 'started'
+    // view.
+    rpc::commands.call_catch("event.download.paused", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
 
-    rpc::call_command("d.set_state_changed", cachedTime.seconds(), rpc::make_target(download));
+    rpc::call_command("d.state_changed.set", cachedTime.seconds(), rpc::make_target(download));
+    rpc::call_command("d.state_counter.set", rpc::call_command_value("d.state_counter", rpc::make_target(download)), rpc::make_target(download));
+
+    // If initial seeding is complete, don't try it again when restarting.
+    if (download->is_done() &&
+        rpc::call_command_void("d.connection_current", rpc::make_target(download)).as_string() == "initial_seed")
+      rpc::call_command("d.connection_seed.set", rpc::call_command_void("d.connection_current", rpc::make_target(download)), rpc::make_target(download));
 
     // Save the state after all the slots, etc have been called so we
     // include the modifications they may make.
@@ -460,7 +441,7 @@ DownloadList::check_hash(Download* download) {
 
   try {
 
-    if (rpc::call_command_value("d.get_hashing", rpc::make_target(download)) != Download::variable_hashing_stopped)
+    if (rpc::call_command_value("d.hashing", rpc::make_target(download)) != Download::variable_hashing_stopped)
       return;
 
     hash_queue(download, Download::variable_hashing_rehash);
@@ -480,7 +461,7 @@ DownloadList::hash_done(Download* download) {
   if (!download->is_hash_checked()) {
     download->set_hash_failed(true);
     
-    std::for_each(slot_map_hash_done().begin(), slot_map_hash_done().end(), download_list_call(download));
+    rpc::commands.call_catch("event.download.hash_failed", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
     return;
   }
 
@@ -493,8 +474,11 @@ DownloadList::hash_done(Download* download) {
   // confirm all the data, avoiding large BW usage on f.ex. the
   // ReiserFS bug with >4GB files.
 
-  int64_t hashing = rpc::call_command_value("d.get_hashing", rpc::make_target(download));
-  rpc::call_command_set_value("d.set_hashing", Download::variable_hashing_stopped, rpc::make_target(download));
+  int64_t hashing = rpc::call_command_value("d.hashing", rpc::make_target(download));
+  rpc::call_command_set_value("d.hashing.set", Download::variable_hashing_stopped, rpc::make_target(download));
+
+  if (download->is_done() && download->download()->info()->is_meta_download())
+    return process_meta_download(download);
 
   switch (hashing) {
   case Download::variable_hashing_initial:
@@ -503,18 +487,19 @@ DownloadList::hash_done(Download* download) {
 
     // If the download was previously completed but the files were
     // f.ex deleted, then we clear the state and complete.
-    if (rpc::call_command_value("d.get_complete", rpc::make_target(download)) && !download->is_done()) {
-      rpc::call_command("d.set_state", (int64_t)0, rpc::make_target(download));
+    if (rpc::call_command_value("d.complete", rpc::make_target(download)) && !download->is_done()) {
+      rpc::call_command("d.state.set", (int64_t)0, rpc::make_target(download));
       download->set_message("Download registered as completed, but hash check returned unfinished chunks.");
     }
 
     // Save resume data so we update time-stamps and priorities if
     // they were invalid/changed while loading/hashing.
-    rpc::call_command("d.set_complete", (int64_t)download->is_done(), rpc::make_target(download));
+    rpc::call_command("d.complete.set", (int64_t)download->is_done(), rpc::make_target(download));
     torrent::resume_save_progress(*download->download(), download->download()->bencode()->get_key("libtorrent_resume"));
 
-    if (rpc::call_command_value("d.get_state", rpc::make_target(download)) == 1)
-      resume(download);
+    if (rpc::call_command_value("d.state", rpc::make_target(download)) == 1)
+      resume(download, download->resume_flags());
+    //rpc::commands.call_catch("scheduler.simple.resume", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
 
     break;
 
@@ -525,6 +510,7 @@ DownloadList::hash_done(Download* download) {
     } else {
       download->set_message("Hash check on download completion found bad chunks, consider using \"safe_sync\".");
       control->core()->push_log("Hash check on download completion found bad chunks, consider using \"safe_sync\".");
+      rpc::commands.call_catch("event.download.hash_final_failed", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
     }
     
     break;
@@ -536,50 +522,48 @@ DownloadList::hash_done(Download* download) {
     return;
   }
 
-  std::for_each(slot_map_hash_done().begin(), slot_map_hash_done().end(), download_list_call(download));
+  rpc::commands.call_catch("event.download.hash_done", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
 }
 
 void
 DownloadList::hash_queue(Download* download, int type) {
   check_contains(download);
 
-  if (rpc::call_command_value("d.get_hashing", rpc::make_target(download)) != Download::variable_hashing_stopped)
+  if (rpc::call_command_value("d.hashing", rpc::make_target(download)) != Download::variable_hashing_stopped)
     throw torrent::internal_error("DownloadList::hash_queue(...) hashing already queued.");
 
-//   close_throw(download);
   // HACK
   if (download->is_open()) {
     pause(download, torrent::Download::stop_skip_tracker);
     download->download()->close();
-    std::for_each(slot_map_hash_removed().begin(), slot_map_hash_removed().end(), download_list_call(download));
-    std::for_each(slot_map_close().begin(), slot_map_close().end(), download_list_call(download));
+
+    rpc::commands.call_catch("event.download.hash_removed", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
+    rpc::commands.call_catch("event.download.closed", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
   }
 
   torrent::resume_clear_progress(*download->download(), download->download()->bencode()->get_key("libtorrent_resume"));
 
   download->set_hash_failed(false);
-  rpc::call_command_set_value("d.set_hashing", type, rpc::make_target(download));
+  rpc::call_command_set_value("d.hashing.set", type, rpc::make_target(download));
 
   if (download->is_open())
     throw torrent::internal_error("DownloadList::hash_clear(...) download still open.");
 
   // If any more stuff is added here, make sure resume etc are still
   // correct.
-  std::for_each(slot_map_hash_queued().begin(), slot_map_hash_queued().end(), download_list_call(download));
+  rpc::commands.call_catch("event.download.hash_queued", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
 }
 
 void
 DownloadList::received_finished(Download* download) {
   check_contains(download);
 
-  if (rpc::call_command_value("get_check_hash")) {
+  if (rpc::call_command_value("pieces.hash.on_completion"))
     // Set some 'checking_finished_thingie' variable to make hash_done
     // trigger correctly, also so it can bork on missing data.
     hash_queue(download, Download::variable_hashing_last);
-
-  } else {
+  else
     confirm_finished(download);
-  }
 }
 
 // The download must be open when we call this function.
@@ -587,35 +571,91 @@ void
 DownloadList::confirm_finished(Download* download) {
   check_contains(download);
 
-  rpc::call_command("d.set_complete", (int64_t)1, rpc::make_target(download));
+  if (download->download()->info()->is_meta_download())
+    return process_meta_download(download);
 
-  rpc::call_command("d.set_connection_current", rpc::call_command_void("d.get_connection_seed", rpc::make_target(download)), rpc::make_target(download));
+  rpc::call_command("d.complete.set", (int64_t)1, rpc::make_target(download));
+
+  rpc::call_command("d.connection_current.set", rpc::call_command_void("d.connection_seed", rpc::make_target(download)), rpc::make_target(download));
   download->set_priority(download->priority());
 
-  if (rpc::call_command_value("d.get_min_peers", rpc::make_target(download)) == rpc::call_command_value("get_min_peers") && rpc::call_command_value("get_min_peers_seed") >= 0)
-    rpc::call_command("d.set_min_peers", rpc::call_command_void("get_min_peers_seed"), rpc::make_target(download));
+  if (rpc::call_command_value("d.peers_min", rpc::make_target(download)) == rpc::call_command_value("throttle.min_peers.normal") &&
+      rpc::call_command_value("throttle.min_peers.seed") >= 0)
+    rpc::call_command("d.peers_min.set", rpc::call_command_void("throttle.min_peers.seed"), rpc::make_target(download));
 
-  if (rpc::call_command_value("d.get_max_peers", rpc::make_target(download)) == rpc::call_command_value("get_max_peers") && rpc::call_command_value("get_max_peers_seed") >= 0)
-    rpc::call_command("d.set_max_peers", rpc::call_command_void("get_max_peers_seed"), rpc::make_target(download));
+  if (rpc::call_command_value("d.peers_max", rpc::make_target(download)) == rpc::call_command_value("throttle.max_peers.normal") &&
+      rpc::call_command_value("throttle.max_peers.seed") >= 0)
+    rpc::call_command("d.peers_max.set", rpc::call_command_void("throttle.max_peers.seed"), rpc::make_target(download));
 
   // Do this before the slots are called in case one of them closes
   // the download.
-  if (!download->is_active() && rpc::call_command_value("get_session_on_completion") != 0) {
-    torrent::resume_save_progress(*download->download(), download->download()->bencode()->get_key("libtorrent_resume"));
-    control->core()->download_store()->save(download);
+  //
+  // Obsolete.
+  if (!download->is_active() && rpc::call_command_value("session.on_completion") != 0) {
+    //    torrent::resume_save_progress(*download->download(), download->download()->bencode()->get_key("libtorrent_resume"));
+    control->core()->download_store()->save_resume(download);
   }
 
   // Send the completed request before resuming so we don't reset the
   // up/downloaded baseline.
-  download->download()->tracker_list().send_completed();
+  download->download()->tracker_list()->send_completed();
 
-  std::for_each(slot_map_finished().begin(), slot_map_finished().end(), download_list_call(download));
+  // Save the hash in case the finished event erases it.
+  torrent::HashString infohash = download->info()->hash();
 
-  if (download->resume_flags() != ~uint32_t())
-    throw torrent::internal_error("DownloadList::confirm_finished(...) download->resume_flags() != ~uint32_t().");
+  rpc::commands.call_catch("event.download.finished", rpc::make_target(download), torrent::Object(), "Download event action failed: ");
 
-  if (!download->is_active() && rpc::call_command_value("d.get_state", rpc::make_target(download)) == 1)
-    resume(download, torrent::Download::start_skip_tracker | torrent::Download::start_keep_baseline);
+//   if (download->resume_flags() != ~uint32_t())
+//     throw torrent::internal_error("DownloadList::confirm_finished(...) download->resume_flags() != ~uint32_t().");
+
+  // See #1292.
+  //
+  // Just reset the value for the moment. If a torrent finishes while
+  // others are hashing, or some other situtation that causes resume
+  // flag to change could cause the state to be invalid.
+  //
+  // TODO: Add a check when setting the flags to see if the torrent is
+  // being hashed.
+  download->set_resume_flags(~uint32_t());
+
+  if (find(infohash) != end() &&
+      !download->is_active() && rpc::call_command_value("d.state", rpc::make_target(download)) == 1)
+    resume(download,
+           torrent::Download::start_no_create |
+           torrent::Download::start_skip_tracker |
+           torrent::Download::start_keep_baseline);
+}
+
+void
+DownloadList::process_meta_download(Download* download) {
+  rpc::call_command("d.stop", torrent::Object(), rpc::make_target(download));
+  rpc::call_command("d.close", torrent::Object(), rpc::make_target(download));
+
+  std::string metafile = (*download->file_list()->begin())->frozen_path();
+  std::fstream file(metafile.c_str(), std::ios::in | std::ios::binary);
+  if (!file.is_open()) {
+    control->core()->push_log("Could not read download metadata.");
+    return;
+  }
+
+  torrent::Object* bencode = new torrent::Object(torrent::Object::create_map());
+  file >> bencode->insert_key("info", torrent::Object());
+  if (file.fail()) {
+    delete bencode;
+    control->core()->push_log("Could not create download, the input is not a valid torrent.");
+    return;
+  }
+  file.close();
+
+  // Steal the keys we still need. The old download has no use for them.
+  bencode->insert_key("rtorrent_meta_download", torrent::Object()).swap(download->bencode()->get_key("rtorrent_meta_download"));
+  if (download->bencode()->has_key("announce"))
+    bencode->insert_key("announce", torrent::Object()).swap(download->bencode()->get_key("announce"));
+  if (download->bencode()->has_key("announce-list"))
+    bencode->insert_key("announce-list", torrent::Object()).swap(download->bencode()->get_key("announce-list"));
+
+  erase_ptr(download);
+  control->core()->try_create_download_from_meta_download(bencode, metafile);
 }
 
 }

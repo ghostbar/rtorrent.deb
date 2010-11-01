@@ -38,14 +38,15 @@
 
 #include <algorithm>
 #include <functional>
-#include <stdexcept>
 #include <dirent.h>
 #include <rak/path.h>
+#include <torrent/exceptions.h>
 
 #include "directory.h"
 
 namespace utils {
 
+// Keep this?
 bool
 Directory::is_valid() const {
   if (m_path.empty())
@@ -58,38 +59,40 @@ Directory::is_valid() const {
 }
 
 bool
-Directory::update(bool hideDot) {
+Directory::update(int flags) {
   if (m_path.empty())
-    throw std::logic_error("Directory::update() tried to open an empty path");
+    throw torrent::input_error("Directory::update() tried to open an empty path.");
 
   DIR* d = opendir(rak::path_expand(m_path).c_str());
 
   if (d == NULL)
     return false;
 
-  struct dirent* ent;
+  struct dirent* entry;
 
-  while ((ent = readdir(d)) != NULL) {
-    std::string de(ent->d_name);
+  while ((entry = readdir(d)) != NULL) {
+    if ((flags & update_hide_dot) && entry->d_name[0] == '.')
+      continue;
 
-    if (!de.empty() && (!hideDot || de[0] != '.'))
-      Base::push_back(ent->d_name);
+    iterator itr = base_type::insert(end(), value_type());
+
+    itr->d_fileno = entry->d_fileno;
+    itr->d_reclen = entry->d_reclen;
+    itr->d_type   = entry->d_type;
+
+#ifdef DIRENT_NAMLEN_EXISTS_FOOBAR
+    itr->d_name   = std::string(entry->d_name, entry->d_name + entry->d_namlen);
+#else
+    itr->d_name   = std::string(entry->d_name);
+#endif
   }
 
   closedir(d);
-  Base::sort(std::less<std::string>());
+
+  if (flags & update_sort)
+    std::sort(begin(), end());
 
   return true;
-}
-
-Directory::Base
-Directory::make_list() {
-  Base l;
-
-  for (Base::iterator itr = begin(); itr != end(); ++itr)
-    l.push_back(m_path + *itr);
-
-  return l;
 }
 
 }

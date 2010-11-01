@@ -39,6 +39,7 @@
 #include <stdexcept>
 #include <string.h>
 #include <sigc++/adaptors/bind.h>
+#include <torrent/throttle.h>
 #include <torrent/torrent.h>
 
 #include "core/manager.h"
@@ -119,59 +120,40 @@ Root::cleanup() {
   m_control = NULL;
 }
 
+const char*
+Root::get_throttle_keys() {
+  const std::string& keyLayout = rpc::call_command_string("keys.layout");
+
+  if (strcasecmp(keyLayout.c_str(), "azerty") == 0)
+    return "qwQWsxSXdcDC";
+  else if (strcasecmp(keyLayout.c_str(), "qwertz") == 0)
+    return "ayAYsxSXdcDC";
+  else if (strcasecmp(keyLayout.c_str(), "dvorak") == 0)
+    return "a;A:oqOQejEJ";
+  else
+    return "azAZsxSXdcDC";
+}
+
 void
 Root::setup_keys() {
   m_control->input()->push_back(&m_bindings);
 
-  const std::string& keyLayout = rpc::call_command_string("get_key_layout");
+  const char* keys = get_throttle_keys();
 
-  if (strcasecmp(keyLayout.c_str(), "azerty") == 0) {
-    m_bindings['q']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), 1);
-    m_bindings['w']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), -1);
-    m_bindings['Q']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), 1);
-    m_bindings['W']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), -1);
+  m_bindings[keys[ 0]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), 1);
+  m_bindings[keys[ 1]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), -1);
+  m_bindings[keys[ 2]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), 1);
+  m_bindings[keys[ 3]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), -1);
 
-  } else if (strcasecmp(keyLayout.c_str(), "qwertz") == 0) {
-    m_bindings['a']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), 1);
-    m_bindings['y']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), -1);
-    m_bindings['A']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), 1);
-    m_bindings['Y']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), -1);
+  m_bindings[keys[ 4]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), 5);
+  m_bindings[keys[ 5]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), -5);
+  m_bindings[keys[ 6]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), 5);
+  m_bindings[keys[ 7]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), -5);
 
-  } else if (strcasecmp(keyLayout.c_str(), "dvorak") == 0) {
-    m_bindings['a']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), 1);
-    m_bindings[';']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), -1);
-    m_bindings['A']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), 1);
-    m_bindings[':']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), -1);
-
-  } else {
-    m_bindings['a']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), 1);
-    m_bindings['z']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), -1);
-    m_bindings['A']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), 1);
-    m_bindings['Z']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), -1);
-  }
-
-  if (strcasecmp(keyLayout.c_str(), "dvorak") != 0) {
-    m_bindings['s']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), 5);
-    m_bindings['x']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), -5);
-    m_bindings['S']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), 5);
-    m_bindings['X']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), -5);
-
-    m_bindings['d']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), 50);
-    m_bindings['c']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), -50);
-    m_bindings['D']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), 50);
-    m_bindings['C']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), -50);
-
-  } else {
-    m_bindings['o']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), 5);
-    m_bindings['q']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), -5);
-    m_bindings['O']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), 5);
-    m_bindings['Q']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), -5);
-
-    m_bindings['e']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), 50);
-    m_bindings['j']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), -50);
-    m_bindings['E']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), 50);
-    m_bindings['J']           = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), -50);
-  }
+  m_bindings[keys[ 8]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), 50);
+  m_bindings[keys[ 9]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_up_throttle), -50);
+  m_bindings[keys[10]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), 50);
+  m_bindings[keys[11]]      = sigc::bind(sigc::mem_fun(*this, &Root::adjust_down_throttle), -50);
 
   m_bindings['\x0C']        = sigc::mem_fun(m_control->display(), &display::Manager::force_redraw); // ^L
   m_bindings['\x11']        = sigc::mem_fun(m_control, &Control::receive_normal_shutdown); // ^Q
@@ -182,17 +164,17 @@ Root::set_down_throttle(unsigned int throttle) {
   if (m_windowStatusbar != NULL)
     m_windowStatusbar->mark_dirty();
 
-  torrent::set_down_throttle(throttle * 1024);
+  torrent::down_throttle_global()->set_max_rate(throttle * 1024);
 
-  unsigned int div    = std::max<int>(rpc::call_command_value("get_max_downloads_div"), 0);
-  unsigned int global = std::max<int>(rpc::call_command_value("get_max_downloads_global"), 0);
+  unsigned int div    = std::max<int>(rpc::call_command_value("throttle.max_downloads.div"), 0);
+  unsigned int global = std::max<int>(rpc::call_command_value("throttle.max_downloads.global"), 0);
 
   if (throttle == 0 || div == 0) {
     torrent::set_max_download_unchoked(global);
     return;
   }
 
-  throttle /= rpc::call_command_value("get_max_downloads_div");
+  throttle /= div;
 
   unsigned int maxUnchoked;
 
@@ -212,17 +194,17 @@ Root::set_up_throttle(unsigned int throttle) {
   if (m_windowStatusbar != NULL)
     m_windowStatusbar->mark_dirty();
 
-  torrent::set_up_throttle(throttle * 1024);
+  torrent::up_throttle_global()->set_max_rate(throttle * 1024);
 
-  unsigned int div    = std::max<int>(rpc::call_command_value("get_max_uploads_div"), 0);
-  unsigned int global = std::max<int>(rpc::call_command_value("get_max_uploads_global"), 0);
+  unsigned int div    = std::max<int>(rpc::call_command_value("throttle.max_uploads.div"), 0);
+  unsigned int global = std::max<int>(rpc::call_command_value("throttle.max_uploads.global"), 0);
 
   if (throttle == 0 || div == 0) {
     torrent::set_max_unchoked(global);
     return;
   }
 
-  throttle /= rpc::call_command_value("get_max_uploads_div");
+  throttle /= div;
 
   unsigned int maxUnchoked;
 
@@ -239,12 +221,12 @@ Root::set_up_throttle(unsigned int throttle) {
 
 void
 Root::adjust_down_throttle(int throttle) {
-  set_down_throttle(std::max<int>(torrent::down_throttle() / 1024 + throttle, 0));
+  set_down_throttle(std::max<int>(torrent::down_throttle_global()->max_rate() / 1024 + throttle, 0));
 }
 
 void
 Root::adjust_up_throttle(int throttle) {
-  set_up_throttle(std::max<int>(torrent::up_throttle() / 1024 + throttle, 0));
+  set_up_throttle(std::max<int>(torrent::up_throttle_global()->max_rate() / 1024 + throttle, 0));
 }
 
 void

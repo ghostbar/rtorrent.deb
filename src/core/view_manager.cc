@@ -53,120 +53,23 @@
 
 namespace core {
 
-class ViewSortFalse : public ViewSort {
-public:
-  virtual bool operator () (Download* d1, Download* d2) const {
-    return false;
-  }
-};
-
-class ViewSortName : public ViewSort {
-public:
-  virtual bool operator () (Download* d1, Download* d2) const {
-    return d1->download()->name() < d2->download()->name();
-  }
-};
-
-class ViewSortVariable : public ViewSort {
-public:
-  ViewSortVariable(const char* name, const char* value) : m_name(name), m_value(value) {}
-
-  virtual bool operator () (Download* d1, Download* d2) const {
-    return
-      rpc::call_command_string(m_name, rpc::make_target(d1)) == m_value &&
-      rpc::call_command_string(m_name, rpc::make_target(d2)) != m_value;
-  }
-
-private:
-  const char* m_name;
-  const char* m_value;
-};
-
-class ViewSortVariableValue : public ViewSort {
-public:
-  ViewSortVariableValue(const char* name, bool reverse = false) : m_name(name), m_reverse(reverse) {}
-
-  virtual bool operator () (Download* d1, Download* d2) const {
-    if (m_reverse)
-      return rpc::call_command_value(m_name, rpc::make_target(d2)) < rpc::call_command_value(m_name, rpc::make_target(d1));
-    else
-      return rpc::call_command_value(m_name, rpc::make_target(d1)) < rpc::call_command_value(m_name, rpc::make_target(d2));
-  }
-
-private:
-  const char* m_name;
-  bool        m_reverse;
-};
-
-class ViewSortReverse : public ViewSort {
-public:
-  ViewSortReverse(ViewSort* s) : m_sort(s) {}
-  ~ViewSortReverse() { delete m_sort; }
-
-  virtual bool operator () (Download* d1, Download* d2) const {
-    return (*m_sort)(d2, d1);
-  }
-
-private:
-  ViewSort* m_sort;
-};
-
-class ViewFilterVariableValue : public ViewFilter {
-public:
-  ViewFilterVariableValue(const char* name, torrent::Object::value_type v, bool inverse = false) :
-    m_name(name), m_value(v), m_inverse(inverse) {}
-
-  virtual bool operator () (Download* d1) const {
-    return (rpc::call_command_value(m_name, rpc::make_target(d1)) == m_value) != m_inverse;
-  }
-
-private:
-  const char*                 m_name;
-  torrent::Object::value_type m_value;
-  bool                        m_inverse;
-};
-
-// Really need to implement a factory and allow options in the sort
-// statements.
-ViewManager::ViewManager(DownloadList* dl) :
-  m_list(dl) {
-
-//   m_sort["first"]        = new ViewSortNot(new ViewSort());
-  m_sort["last"]          = new ViewSortFalse();
-  m_sort["name"]          = new ViewSortName();
-  m_sort["name_reverse"]  = new ViewSortReverse(new ViewSortName());
-
-  m_sort["stopped"]       = new ViewSortVariableValue("d.get_state");
-  m_sort["started"]       = new ViewSortVariableValue("d.get_state", true);
-  m_sort["complete"]      = new ViewSortVariableValue("d.get_complete");
-  m_sort["incomplete"]    = new ViewSortVariableValue("d.get_complete", true);
-
-  m_sort["state_changed"]         = new ViewSortVariableValue("d.get_state_changed");
-  m_sort["state_changed_reverse"] = new ViewSortVariableValue("d.get_state_changed", true);
-
-  m_filter["started"]     = new ViewFilterVariableValue("d.get_state", 1);
-  m_filter["stopped"]     = new ViewFilterVariableValue("d.get_state", 0);
-  m_filter["complete"]    = new ViewFilterVariableValue("d.get_complete", 0, true);
-  m_filter["incomplete"]  = new ViewFilterVariableValue("d.get_complete", 0);
-  m_filter["hashing"]     = new ViewFilterVariableValue("d.get_hashing", 0, true);
-}
-
 void
 ViewManager::clear() {
   std::for_each(begin(), end(), rak::call_delete<View>());
-  std::for_each(m_sort.begin(), m_sort.end(), rak::on(rak::mem_ref(&sort_map::value_type::second), rak::call_delete<ViewSort>()));
-  std::for_each(m_filter.begin(), m_filter.end(), rak::on(rak::mem_ref(&filter_map::value_type::second), rak::call_delete<ViewFilter>()));
 
   base_type::clear();
 }
 
 ViewManager::iterator
 ViewManager::insert(const std::string& name) {
+  if (name.empty())
+    throw torrent::input_error("View with empty name not supported.");
+
   if (find(name) != end())
-    throw torrent::internal_error("ViewManager::insert(...) name already inserted.");
+    throw torrent::input_error("View with same name already inserted.");
 
   View* view = new View();
-  view->initialize(name, m_list);
+  view->initialize(name);
 
   return base_type::insert(end(), view);
 }
@@ -186,23 +89,6 @@ ViewManager::find_throw(const std::string& name) {
   return itr;
 }
 
-inline ViewManager::sort_list
-ViewManager::build_sort_list(const sort_args& args) {
-  View::sort_list sortList;
-  sortList.reserve(args.size());
-
-  for (sort_args::const_iterator itr = args.begin(), last = args.end(); itr != last; ++itr) {
-    sort_map::const_iterator sortItr = m_sort.find(itr->c_str());
-
-    if (sortItr == m_sort.end())
-      throw torrent::input_error("Invalid sorting identifier.");
-
-    sortList.push_back(sortItr->second);
-  }
-
-  return sortList;
-}
-
 void
 ViewManager::sort(const std::string& name, uint32_t timeout) {
   iterator viewItr = find_throw(name);
@@ -212,46 +98,14 @@ ViewManager::sort(const std::string& name, uint32_t timeout) {
 
   // Should we rename sort, or add a seperate function?
   (*viewItr)->filter();
-
   (*viewItr)->sort();
 }
 
 void
-ViewManager::set_sort_new(const std::string& name, const sort_args& sort) {
+ViewManager::set_filter(const std::string& name, const std::string& cmd) {
   iterator viewItr = find_throw(name);
 
-  (*viewItr)->set_sort_new(build_sort_list(sort));
-}
-
-void
-ViewManager::set_sort_current(const std::string& name, const sort_args& sort) {
-  iterator viewItr = find_throw(name);
-
-  (*viewItr)->set_sort_current(build_sort_list(sort));
-}
-
-inline ViewManager::filter_list
-ViewManager::build_filter_list(const filter_args& args) {
-  View::filter_list filterList;
-  filterList.reserve(args.size());
-
-  for (filter_args::const_iterator itr = args.begin(), last = args.end(); itr != last; ++itr) {
-    filter_map::const_iterator filterItr = m_filter.find(itr->c_str());
-
-    if (filterItr == m_filter.end())
-      throw torrent::input_error("Invalid filtering identifier.");
-
-    filterList.push_back(filterItr->second);
-  }
-
-  return filterList;
-}
-
-void
-ViewManager::set_filter(const std::string& name, const filter_args& args) {
-  iterator viewItr = find_throw(name);
-
-  (*viewItr)->set_filter(build_filter_list(args));
+  (*viewItr)->set_filter(cmd);
   (*viewItr)->filter();
 }
 
@@ -261,30 +115,8 @@ ViewManager::set_filter_on(const std::string& name, const filter_args& args) {
 
   (*viewItr)->clear_filter_on();
 
-  for (filter_args::const_iterator itr = args.begin(); itr != args.end(); ++itr) {
-
-    if (*itr == "start")
-      (*viewItr)->set_filter_on(DownloadList::SLOTS_START);
-
-    else if (*itr == "stop")
-      (*viewItr)->set_filter_on(DownloadList::SLOTS_STOP);
-
-    else if (*itr == "hash_queued")
-      (*viewItr)->set_filter_on(DownloadList::SLOTS_HASH_QUEUED);
-
-    else if (*itr == "hash_removed")
-      (*viewItr)->set_filter_on(DownloadList::SLOTS_HASH_REMOVED);
-
-    else if (*itr == "hash_done")
-      (*viewItr)->set_filter_on(DownloadList::SLOTS_HASH_DONE);
-
-    else if (*itr == "finished")
-      (*viewItr)->set_filter_on(DownloadList::SLOTS_FINISHED);
-
-    else
-      throw torrent::input_error("Invalid filter on identifier.");
-
-  }
+  for (filter_args::const_iterator itr = args.begin(); itr != args.end(); ++itr)
+    (*viewItr)->set_filter_on_event(*itr);
 }
 
 }

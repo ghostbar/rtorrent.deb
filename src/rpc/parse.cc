@@ -36,6 +36,8 @@
 
 #include "config.h"
 
+#include <cstring>
+#include <cstdio>
 #include <locale>
 #include <rak/path.h>
 #include <torrent/exceptions.h>
@@ -170,8 +172,8 @@ parse_value_nothrow(const char* src, int64_t* value, int base, int unit) {
 const char*
 parse_object(const char* first, const char* last, torrent::Object* dest, bool (*delim)(const char)) {
   if (*first == '{') {
-    *dest = torrent::Object(torrent::Object::TYPE_LIST);
-    first = parse_list(first + 1, last, dest, &parse_is_delim_list);
+    *dest = torrent::Object::create_list();
+    first = parse_list(first + 1, last, dest, &parse_is_delim_block);
     first = parse_skip_wspace(first, last);
     
     if (first == last || *first != '}')
@@ -210,20 +212,47 @@ parse_list(const char* first, const char* last, torrent::Object* dest, bool (*de
 }
 
 const char*
-parse_whole_list(const char* first, const char* last, torrent::Object* dest) {
+parse_whole_list(const char* first, const char* last, torrent::Object* dest, bool (*delim)(const char)) {
   first = parse_skip_wspace(first, last);
-  first = parse_object(first, last, dest);
+  first = parse_object(first, last, dest, delim);
   first = parse_skip_wspace(first, last);
 
   if (first != last && parse_is_seperator(*first)) {
-    torrent::Object tmp = torrent::Object(torrent::Object::TYPE_LIST);
+    torrent::Object tmp = torrent::Object::create_list();
     tmp.swap(*dest);
 
     dest->as_list().push_back(tmp);
-    first = parse_list(++first, last, dest);
+    first = parse_list(++first, last, dest, delim);
   }
 
   return first;
+}
+
+std::string
+convert_to_string(const torrent::Object& rawSrc) {
+  const torrent::Object& src = convert_to_single_argument(rawSrc);
+
+  switch (src.type()) {
+  case torrent::Object::TYPE_VALUE: {
+    char buffer[64];
+    snprintf(buffer, 64, "%lli", src.as_value());
+    return std::string(buffer);
+  }
+  case torrent::Object::TYPE_STRING: return src.as_string();
+  case torrent::Object::TYPE_NONE:   return std::string();
+
+  case torrent::Object::TYPE_RAW_BENCODE:
+    if (src.as_raw_bencode().is_empty())
+      return std::string();
+
+    if (src.as_raw_bencode().is_raw_string())
+      return src.as_raw_bencode().as_raw_string().as_string();
+    
+    if (src.as_raw_bencode().is_value())
+      return src.as_raw_bencode().as_value_string();
+
+  default: throw torrent::input_error("Not a string.");
+  }  
 }
 
 std::string
@@ -235,8 +264,8 @@ convert_list_to_string(const torrent::Object& src) {
 }
 
 std::string
-convert_list_to_string(torrent::Object::list_type::const_iterator first,
-                       torrent::Object::list_type::const_iterator last) {
+convert_list_to_string(torrent::Object::list_const_iterator first,
+                       torrent::Object::list_const_iterator last) {
   std::string dest;
 
   while (first != last) {
@@ -270,8 +299,8 @@ convert_list_to_string(torrent::Object::list_type::const_iterator first,
 }
 
 std::string
-convert_list_to_command(torrent::Object::list_type::const_iterator first,
-                        torrent::Object::list_type::const_iterator last) {
+convert_list_to_command(torrent::Object::list_const_iterator first,
+                        torrent::Object::list_const_iterator last) {
   if (first == last)
     throw torrent::input_error("Too few arguments.");
 
@@ -332,12 +361,20 @@ convert_to_value_nothrow(const torrent::Object& src, int64_t* value, int base, i
     break;
 
   case torrent::Object::TYPE_STRING:
-    if (parse_skip_wspace(parse_value(unpacked.as_string().c_str(), value, base, unit),
-                          unpacked.as_string().c_str() + unpacked.as_string().size()) != unpacked.as_string().c_str() + unpacked.as_string().size())
-      return false;
+    return parse_skip_wspace(parse_value(unpacked.as_string().c_str(), value, base, unit),
+                             unpacked.as_string().c_str() + unpacked.as_string().size())
+      == unpacked.as_string().c_str() + unpacked.as_string().size();
 
-    break;
+  case torrent::Object::TYPE_RAW_STRING: {
+    const torrent::raw_string& str = src.as_raw_string();
 
+    char buffer[str.size() + 1];
+    std::memcpy(buffer, str.data(), str.size());
+    buffer[str.size()] = '\0';
+
+    return parse_skip_wspace(parse_value(buffer, value, base, unit), buffer + str.size())
+      == buffer + str.size();
+  }
   case torrent::Object::TYPE_NONE:
     *value = 0;
     break;
@@ -371,11 +408,12 @@ print_object(char* first, char* last, const torrent::Object* src, int flags) {
       return first;
     }
   }
+
   case torrent::Object::TYPE_VALUE:
-    return std::max(first + snprintf(first, std::distance(first, last), "%lli", src->as_value()), last);
+    return std::min(first + snprintf(first, std::distance(first, last), "%lli", src->as_value()), last);
 
   case torrent::Object::TYPE_LIST:
-    for (torrent::Object::list_type::const_iterator itr = src->as_list().begin(), itrEnd = src->as_list().end(); itr != itrEnd; itr++) {
+    for (torrent::Object::list_const_iterator itr = src->as_list().begin(), itrEnd = src->as_list().end(); itr != itrEnd; itr++) {
       first = print_object(first, last, &*itr, flags);
 
       // Don't expand tilde after the first element in the list.
@@ -384,6 +422,8 @@ print_object(char* first, char* last, const torrent::Object* src, int flags) {
 
     return first;
 
+  case torrent::Object::TYPE_NONE:
+    return first;
   default:
     throw torrent::input_error("Invalid type.");
   }
@@ -412,7 +452,7 @@ print_object_std(std::string* dest, const torrent::Object* src, int flags) {
     return;
   }
   case torrent::Object::TYPE_LIST:
-    for (torrent::Object::list_type::const_iterator itr = src->as_list().begin(), itrEnd = src->as_list().end(); itr != itrEnd; itr++) {
+    for (torrent::Object::list_const_iterator itr = src->as_list().begin(), itrEnd = src->as_list().end(); itr != itrEnd; itr++) {
       print_object_std(dest, &*itr, flags);
 
       // Don't expand tilde after the first element in the list.
@@ -421,6 +461,8 @@ print_object_std(std::string* dest, const torrent::Object* src, int flags) {
 
     return;
 
+  case torrent::Object::TYPE_NONE:
+    return;
   default:
     throw torrent::input_error("Invalid type.");
   }

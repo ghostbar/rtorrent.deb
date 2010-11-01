@@ -34,47 +34,50 @@
 //           Skomakerveien 33
 //           3185 Skoppum, NORWAY
 
-#ifndef RTORRENT_CORE_SCHEDULER_H
-#define RTORRENT_CORE_SCHEDULER_H
+#ifndef RTORRENT_UTILS_FILE_STATUS_CACHE_H
+#define RTORRENT_UTILS_FILE_STATUS_CACHE_H
 
 #include <map>
 #include <string>
-#include <inttypes.h>
 
-#include "view.h"
+namespace utils {
 
-namespace core {
+struct file_status {
+  int      m_flags;
+  uint32_t m_mtime;
+};
 
-class DownloadList;
-class View;
-
-class Scheduler {
+class FileStatusCache : public std::map<std::string, file_status> {
 public:
-  typedef uint32_t size_type;
+  typedef std::map<std::string, file_status> base_type;
 
-  static const size_type unlimited = ~size_type();
+  using base_type::iterator;
+  using base_type::const_iterator;
+  using base_type::reverse_iterator;
+  using base_type::const_reverse_iterator;
+  using base_type::value_type;
 
-  Scheduler(DownloadList* dl);
-  ~Scheduler();
+  using base_type::begin;
+  using base_type::end;
+  using base_type::rbegin;
+  using base_type::rend;
 
-  void                set_view(View* view);
+  using base_type::empty;
+  using base_type::size;
 
-  size_type           max_active() const          { return m_maxActive; }
-  void                set_max_active(size_type v) { m_maxActive = v; }
+  using base_type::erase;
 
-  size_type           cycle() const               { return m_cycle; }
-  void                set_cycle(size_type v)      { m_cycle = v; }
+  //  static int flag_
 
-  size_type           active() const;
+  // Insert and return true if the entry does not exist or the new
+  // file's mtime is more recent.
+  bool                insert(const std::string& path, int flags);
 
-  void                update();
+  // Add a function for pruning a sorted list of paths.
 
-private:
-  View*               m_view;
-  DownloadList*       m_downloadList;
-
-  size_type           m_maxActive;
-  size_type           m_cycle;
+  // Function for pruning entries that no longer points to a file, or
+  // has a different mtime.
+  void                prune();
 };
 
 }

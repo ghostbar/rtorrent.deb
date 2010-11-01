@@ -93,6 +93,7 @@ private:
 
   Manager*            m_manager;
   std::iostream*      m_stream;
+  torrent::Object*    m_object;
 
   bool                m_commited;
   bool                m_loaded;
@@ -101,6 +102,7 @@ private:
   bool                m_session;
   bool                m_start;
   bool                m_printLog;
+  bool                m_isFile;
 
   command_list_type         m_commands;
   torrent::Object::map_type m_variables;
@@ -109,6 +111,9 @@ private:
   rak::priority_item  m_taskLoad;
   rak::priority_item  m_taskCommit;
 };
+
+bool is_network_uri(const std::string& uri);
+bool is_magnet_uri(const std::string& uri);
 
 }
 

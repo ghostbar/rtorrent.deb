@@ -3,7 +3,7 @@
 .\" <http://shell.ipoline.com/~elmert/comp/docbook2X/> 
 .\" Please send any bug reports, improvements, comments, patches, 
 .\" etc. to Steve Cheng <steve@ggi-project.org>.
-.TH "RTORRENT" "1" "20 June 2007" "BitTorrent client for ncurses" ""
+.TH "RTORRENT" "1" "14 May 2009" "BitTorrent client for ncurses" ""
 
 .SH NAME
 rtorrent \- a BitTorrent client for ncurses
@@ -64,6 +64,11 @@ Stop an active download, or remove a stopped download.
 \fB^K\fR
 Close a torrent and its files.
 .TP
+\fB^E\fR
+Set the 'create/resize queued' flags on all files in a torrent. This
+is necessary if the underlying files in a torrent have been deleted or
+truncated, and thus rtorrent must recreate them.
+.TP
 \fB^R\fR
 Initiate hash check of torrent.
 .TP
@@ -73,6 +78,10 @@ closed.
 .TP
 \fB^X\fR
 Call commands or change settings.
+.TP
+\fB^B\fR
+Set download to perform initial seeding. Only use when
+you are the first and only seeder so far for the download.
 .TP
 \fB+ | -\fR
 Change the priority of the download.
@@ -191,9 +200,8 @@ Set the default download directory. Defaults to "./".
 \fBsession = \fIdirectory\fB\fR
 Session management will be enabled and the torrent files for all open
 downloads will be stored in this directory. Only one instance of
-rtorrent should be used with each session directory, though at the
-moment no locking is done. An empty string will disable the session
-directory.
+rtorrent can be used per session directory. An empty string will
+disable the session directory.
 .TP
 \fBhttp_proxy = \fIurl\fB\fR
 Use a http proxy. Use an empty string to disable.
@@ -218,6 +226,9 @@ initial encrypted handshake),
 with encryption turned on if it was off or off if it was on), 
 \fBprefer_plaintext\fR (choose plaintext when peer offers a choice 
 between plaintext transmission and RC4 encryption, otherwise RC4 will be used).
+.TP
+\fBpeer_exchange = \fIyes | no\fB\fR
+Enable/disable peer exchange for torrents that aren't marked private. Disabled by default.
 .TP
 \fBschedule = \fIid\fB,\fIstart\fB,\fIinterval\fB,\fIcommand\fB\fR
 Call \fBcommand\fR every \fBinterval\fR
@@ -247,7 +258,8 @@ have been deleted. Clear the association with the 'U' key.
 \fBclose_low_diskspace = \fIspace\fB\fR
 Close any active torrents on filesystems with less than
 \fBspace\fR diskspace left. Use with
-the \fBschedule\fR option.
+the \fBschedule\fR option. A default scheduled event
+with id \fBlow_diskspace\fR is set to 500Mb.
 .TP
 \fBload = \fIfile\fB\fR
 .TP
@@ -337,6 +349,24 @@ setting \fB0\fR\&.
 \fBmax_downloads_global = \fIvalue\fB\fR
 Max upload and download slots allowed. Disable by
 setting \fB0\fR\&.
+.TP
+\fBthrottle_up = \fIname\fB, \fIupload_rate\fB\fR
+.TP
+\fBthrottle_down = \fIname\fB, \fIdownload_rate\fB\fR
+Define secondary throttle and/or set the given upload or download rate. Attach to a download with the d.set_throttle_name=name command
+or switch throttles with Ctrl-T. Download must be stopped when changing throttles. Note that secondary throttles only work if the
+global upload/download is throttled. Setting a download to use the \fBNULL\fR throttle makes the download unthrottled
+even when there is a global throttle. Note that this special case bypasses the global throttle entirely, and as such its rate and
+transfer amounts are not included in the global statistics.
+.TP
+\fBthrottle_ip = \fIname\fB, \fIhost\fB\fR
+.TP
+\fBthrottle_ip = \fIname\fB, \fInetwork/prefix\fB\fR
+.TP
+\fBthrottle_ip = \fIname\fB, \fIstart\fB, \fIend\fB\fR
+Use the given secondary throttle for a host, CIDR network or IP range. All peers with a matching IP will use this throttle instead
+of the global throttle or a custom download throttle. The name may be \fBNULL\fR to make these peers unthrottled, with
+the same caveats as explained above.
 .SH "TRACKER RELATED SETTINGS"
 .PP
 Tracker related settings.
@@ -358,6 +388,26 @@ peers we want. A negative value disables this feature.
 \fBuse_udp_trackers = \fIyes\fB\fR
 Use UDP trackers. Disable if you are behind a firewall, etc, that does
 not allow connections to UDP trackers.
+.TP
+\fBdht = \fIdisabled|off|auto|on\fB\fR
+Support for querying the distributed hash table (DHT) to find peers for trackerless
+torrents or when all trackers are down. Set to \fBdisable\fR to completely
+disable DHT, \fBoff\fR (default) to enable DHT but to not start the
+DHT server, \fBauto\fR to automatically start and stop the DHT server
+as needed or \fBon\fR for permanently keeping the DHT server running.
+When set to automatic, the DHT server will start up when the first non-private torrent
+is started, and will stop 15-30 minutes after the last non-private torrent is
+stopped (or when rTorrent quits). For DHT to work, a session directory must be set (for
+saving the DHT cache).
+.TP
+\fBdht_port = \fInumber\fB\fR
+Set the UDP listen port for DHT. Defaults to 6881.
+.TP
+\fBdht_add_node = \fIhost[:port]\fB\fR
+Not intended for use in the configuration file but as one-time option in the
+client or on the command line to bootstrap an empty DHT node table. Contacts 
+the given node and attempts to bootstrap from it if it replies.
+The port is optional, with port 6881 being used by default.
 .TP
 \fBhttp_capath = \fIpath\fB\fR
 .TP
@@ -392,14 +442,6 @@ number of criteria, including zero, from the following:
 \fBcomplete\fR, \fBincomplete\fR,
 \fBstate_changed\fR,
 \fBstate_changed_reverse\fR
-.TP
-\fBview_filter = \fIname\fB,\fI\&...\fB\fR
-Set a list of filter to apply when new new downloads are added and
-when \fBview_sort\fR is called. All filters must
-match for the download to be included.
-
-\fBstopped\fR, \fBstarted\fR,
-\fBcomplete\fR, \fBincomplete\fR,
 .TP
 \fBkey_layout = \fIqwerty|azerty|qwertz|dvorak\fB\fR
 Change the key-bindings.
@@ -483,11 +525,11 @@ allocated to file chunks.
 \fBreceive_buffer_size = \fIvalue\fB\fR
 Adjust the send and receive buffer size for socket.
 .TP
-\fBumask = \fI0644\fB\fR
+\fBumask = \fI0022\fB\fR
 Set the umask for this process, which is applied to all files created
 by the program.
 .TP
-\fBworking_directory = \fIdirectory\fB\fR
+\fBcwd = \fIdirectory\fB\fR
 Changes the working directory of the process using
 \fBchdir\fR\&.
 .TP

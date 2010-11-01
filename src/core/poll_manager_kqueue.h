@@ -53,6 +53,7 @@ public:
   torrent::Poll*      get_torrent_poll();
 
   void                poll(rak::timer timeout);
+  void                poll_simple(rak::timer timeout);
 
 private:
   PollManagerKQueue(torrent::Poll* p) : PollManager(p) {}

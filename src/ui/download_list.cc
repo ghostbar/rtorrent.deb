@@ -98,7 +98,6 @@ DownloadList::activate(display::Frame* frame, bool focus) {
   m_frame = frame;
 
   control->input()->push_back(&m_bindings);
-  control->core()->download_list()->slot_map_erase()["0_download_list"] = sigc::mem_fun(this, &DownloadList::receive_download_erased);
 
   activate_display(DISPLAY_DOWNLOAD_LIST);
 }
@@ -119,6 +118,23 @@ DownloadList::disable() {
 core::View*
 DownloadList::current_view() {
   return dynamic_cast<ElementDownloadList*>(m_uiArray[DISPLAY_DOWNLOAD_LIST])->view();
+}
+
+void
+DownloadList::set_current_view(const std::string& name) {
+  return dynamic_cast<ElementDownloadList*>(m_uiArray[DISPLAY_DOWNLOAD_LIST])->receive_change_view(name);
+}
+
+// This should also do focus_next() or something.
+void
+DownloadList::unfocus_download(core::Download* d) {
+  if (current_view()->focus() >= current_view()->end_visible() || *current_view()->focus() != d)
+    return;
+
+  if (m_state == DISPLAY_DOWNLOAD)
+    activate_display(DISPLAY_DOWNLOAD_LIST);
+
+  current_view()->next_focus();
 }
 
 void
@@ -204,7 +220,9 @@ DownloadList::activate_display(Display displayType) {
   // Set title.
   switch (displayType) {
   case DISPLAY_DOWNLOAD_LIST:
-    control->ui()->window_title()->set_title("rTorrent " VERSION "/" + std::string(torrent::version()) + " - " + rpc::call_command_string("get_name"));
+    control->ui()->window_title()->set_title("rTorrent " VERSION "/" +
+                                             std::string(torrent::version()) + " - " +
+                                             rpc::call_command_string("session.name"));
     break;
   case DISPLAY_LOG:
     control->ui()->window_title()->set_title("Log");
@@ -226,17 +244,17 @@ DownloadList::receive_view_input(Input type) {
 
   switch (type) {
   case INPUT_LOAD_DEFAULT:
-    title = "load_start";
+    title = "load.start";
     break;
 
   case INPUT_LOAD_MODIFIED:
-    title = "load";
+    title = "load.normal";
     break;
 
   case INPUT_CHANGE_DIRECTORY:
     title = "change_directory";
 
-    input->str() = rpc::call_command_string("get_directory");
+    input->str() = rpc::call_command_string("directory.default");
     input->set_pos(input->str().length());
 
     break;
@@ -255,7 +273,7 @@ DownloadList::receive_view_input(Input type) {
   input->signal_show_next().connect(sigc::mem_fun(*esl, &ElementStringList::next_screen));
 
   input->signal_show_range().connect(sigc::hide(sigc::hide(sigc::bind(sigc::mem_fun(*this, &DownloadList::activate_display), DISPLAY_STRING_LIST))));
-  input->signal_show_range().connect(sigc::mem_fun(*esl, &ElementStringList::set_range<utils::Directory::iterator>));
+  input->signal_show_range().connect(sigc::mem_fun(*esl, &ElementStringList::set_range_dirent<utils::Directory::iterator>));
 
   input->bindings()['\n']      = sigc::bind(sigc::mem_fun(*this, &DownloadList::receive_exit_input), type);
   input->bindings()[KEY_ENTER] = sigc::bind(sigc::mem_fun(*this, &DownloadList::receive_exit_input), type);
@@ -295,8 +313,8 @@ DownloadList::receive_exit_input(Input type) {
       if ((*current_view()->focus())->is_open())
         throw torrent::input_error("Cannot change root directory on an open download.");
 
-      rpc::call_command("d.set_directory", rak::trim(input->str()), rpc::make_target(*current_view()->focus()));
-      control->core()->push_log_std("New root directory \"" + rpc::call_command_string("d.get_directory", rpc::make_target(*current_view()->focus())) + "\" for torrent.");
+      rpc::call_command("d.directory.set", rak::trim(input->str()), rpc::make_target(*current_view()->focus()));
+      control->core()->push_log_std("New root directory \"" + rpc::call_command_string("d.directory", rpc::make_target(*current_view()->focus())) + "\" for torrent.");
       break;
 
     case INPUT_COMMAND:
@@ -314,14 +332,6 @@ DownloadList::receive_exit_input(Input type) {
   activate_display(DISPLAY_DOWNLOAD_LIST);
 
   delete input;
-}
-
-void
-DownloadList::receive_download_erased(core::Download* d) {
-  if (m_state != DISPLAY_DOWNLOAD || current_view()->focus() == current_view()->end_visible() || *current_view()->focus() != d)
-    return;
-
-  activate_display(DISPLAY_DOWNLOAD_LIST);
 }
 
 void

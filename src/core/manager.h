@@ -40,12 +40,19 @@
 #include <iosfwd>
 #include <vector>
 
+#include <torrent/connection_manager.h>
+
 #include "download_list.h"
 #include "poll_manager.h"
+#include "range_map.h"
 #include "log.h"
 
 namespace torrent {
   class Bencode;
+}
+
+namespace utils {
+class FileStatusCache;
 }
 
 namespace core {
@@ -53,11 +60,15 @@ namespace core {
 class DownloadStore;
 class HttpQueue;
 
+typedef std::map<std::string, torrent::ThrottlePair> ThrottleMap;
+
 class View;
 
 class Manager {
 public:
   typedef DownloadList::iterator                    DListItr;
+  typedef utils::FileStatusCache                    FileStatusCache;
+
   typedef sigc::slot1<void, DownloadList::iterator> SlotReady;
   typedef sigc::slot0<void>                         SlotFailed;
 
@@ -66,18 +77,25 @@ public:
 
   DownloadList*       download_list()                     { return m_downloadList; }
   DownloadStore*      download_store()                    { return m_downloadStore; }
+  FileStatusCache*    file_status_cache()                 { return m_fileStatusCache; }
 
   HttpQueue*          http_queue()                        { return m_httpQueue; }
+  CurlStack*          http_stack()                        { return m_httpStack; }
 
   View*               hashing_view()                      { return m_hashingView; }
   void                set_hashing_view(View* v);
 
-  PollManager*        get_poll_manager()                  { return m_pollManager; }
   Log&                get_log_important()                 { return m_logImportant; }
   Log&                get_log_complete()                  { return m_logComplete; }
 
+  ThrottleMap&          throttles()                       { return m_throttles; }
+  torrent::ThrottlePair get_throttle(const std::string& name);
+
+  // Use custom throttle for the given range of IP addresses.
+  void                  set_address_throttle(uint32_t begin, uint32_t end, torrent::ThrottlePair throttles);
+  torrent::ThrottlePair get_address_throttle(const sockaddr* addr);
+
   // Really should find a more descriptive name.
-  void                initialize_first();
   void                initialize_second();
   void                cleanup();
 
@@ -96,6 +114,7 @@ public:
 
   void                push_log(const char* msg);
   void                push_log_std(const std::string& msg) { m_logImportant.push_front(msg); m_logComplete.push_front(msg); }
+  void                push_log_complete(const std::string& msg) { m_logComplete.push_front(msg); }
 
   void                handshake_log(const sockaddr* sa, int msg, int err, const torrent::HashString* hash);
 
@@ -109,27 +128,36 @@ public:
   // Temporary, find a better place for this.
   void                try_create_download(const std::string& uri, int flags, const command_list_type& commands);
   void                try_create_download_expand(const std::string& uri, int flags, command_list_type commands = command_list_type());
+  void                try_create_download_from_meta_download(torrent::Object* bencode, const std::string& metafile);
 
 private:
+  typedef RangeMap<uint32_t, torrent::ThrottlePair> AddressThrottleMap;
+
   void                create_http(const std::string& uri);
   void                create_final(std::istream* s);
 
   void                initialize_bencode(Download* d);
 
   void                receive_http_failed(std::string msg);
-
   void                receive_hashing_changed();
 
   DownloadList*       m_downloadList;
   DownloadStore*      m_downloadStore;
+  FileStatusCache*    m_fileStatusCache;
   HttpQueue*          m_httpQueue;
+  CurlStack*          m_httpStack;
 
   View*               m_hashingView;
 
-  PollManager*        m_pollManager;
+  ThrottleMap         m_throttles;
+  AddressThrottleMap  m_addressThrottles;
+
   Log                 m_logImportant;
   Log                 m_logComplete;
 };
+
+// Meh, cleanup.
+extern void receive_tracker_dump(const std::string& url, const char* data, size_t size);
 
 }
 

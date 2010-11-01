@@ -74,6 +74,8 @@ public:
   WStatusbar*         window_statusbar()                      { return m_windowStatusbar; }
   WInput*             window_input()                          { return m_windowInput; }
 
+  DownloadList*       download_list()                         { return m_downloadList; }
+
   void                set_down_throttle(unsigned int throttle);
   void                set_up_throttle(unsigned int throttle);
 
@@ -83,6 +85,8 @@ public:
 
   void                adjust_down_throttle(int throttle);
   void                adjust_up_throttle(int throttle);
+
+  const char*         get_throttle_keys();
 
   void                enable_input(const std::string& title, input::TextInput* input);
   void                disable_input();

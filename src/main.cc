@@ -49,6 +49,7 @@
 #include <execinfo.h>
 #endif
 
+#include "core/dht_manager.h"
 #include "core/download.h"
 #include "core/download_factory.h"
 #include "core/download_store.h"
@@ -64,13 +65,19 @@
 #include "utils/directory.h"
 
 #include "control.h"
+#include "command_helpers.h"
 #include "globals.h"
 #include "signal_handler.h"
 #include "option_parser.h"
 
+#include "thread_main.h"
+#include "thread_worker.h"
+
 void do_panic(int signum);
 void print_help();
 void initialize_commands();
+
+void do_nothing() {}
 
 int
 parse_options(Control* c, int argc, char** argv) {
@@ -80,11 +87,14 @@ parse_options(Control* c, int argc, char** argv) {
     // Converted.
     optionParser.insert_flag('h', sigc::ptr_fun(&print_help));
     optionParser.insert_flag('n', OptionParser::Slot());
+    optionParser.insert_flag('D', OptionParser::Slot());
+    optionParser.insert_flag('I', OptionParser::Slot());
+    optionParser.insert_flag('K', OptionParser::Slot());
 
-    optionParser.insert_option('b', sigc::bind<0>(sigc::ptr_fun(&rpc::call_command_set_string), "bind"));
-    optionParser.insert_option('d', sigc::bind<0>(sigc::ptr_fun(&rpc::call_command_set_string), "directory"));
+    optionParser.insert_option('b', sigc::bind<0>(sigc::ptr_fun(&rpc::call_command_set_string), "network.bind_address.set"));
+    optionParser.insert_option('d', sigc::bind<0>(sigc::ptr_fun(&rpc::call_command_set_string), "directory.default.set"));
     optionParser.insert_option('i', sigc::bind<0>(sigc::ptr_fun(&rpc::call_command_set_string), "ip"));
-    optionParser.insert_option('p', sigc::bind<0>(sigc::ptr_fun(&rpc::call_command_set_string), "port_range"));
+    optionParser.insert_option('p', sigc::bind<0>(sigc::ptr_fun(&rpc::call_command_set_string), "network.port_range.set"));
     optionParser.insert_option('s', sigc::bind<0>(sigc::ptr_fun(&rpc::call_command_set_string), "session"));
 
     optionParser.insert_option('O', sigc::ptr_fun(&rpc::parse_command_single_std));
@@ -99,16 +109,21 @@ parse_options(Control* c, int argc, char** argv) {
 
 void
 load_session_torrents(Control* c) {
-  // Load session torrents.
-  std::list<std::string> l = c->core()->download_store()->get_formated_entries().make_list();
+  utils::Directory entries = c->core()->download_store()->get_formated_entries();
 
-  for (std::list<std::string>::iterator first = l.begin(), last = l.end(); first != last; ++first) {
+  for (utils::Directory::const_iterator first = entries.begin(), last = entries.end(); first != last; ++first) {
+    // We don't really support session torrents that are links. These
+    // would be overwritten anyway on exit, and thus not really be
+    // useful.
+    if (!first->is_file())
+      continue;
+
     core::DownloadFactory* f = new core::DownloadFactory(c->core());
 
     // Replace with session torrent flag.
     f->set_session(true);
     f->slot_finished(sigc::bind(sigc::ptr_fun(&rak::call_delete_func<core::DownloadFactory>), f));
-    f->load(*first);
+    f->load(entries.path() + first->d_name);
     f->commit();
   }
 }
@@ -148,6 +163,12 @@ main(int argc, char** argv) {
 
     control = new Control;
     
+    main_thread = new ThreadMain();
+    main_thread->init_thread();
+
+    worker_thread = new ThreadWorker();
+    worker_thread->init_thread();
+
     srandom(cachedTime.usec());
     srand48(cachedTime.usec());
 
@@ -159,92 +180,643 @@ main(int argc, char** argv) {
     SignalHandler::set_handler(SIGBUS,   sigc::bind(sigc::ptr_fun(&do_panic), SIGBUS));
     SignalHandler::set_handler(SIGFPE,   sigc::bind(sigc::ptr_fun(&do_panic), SIGFPE));
 
-    control->core()->initialize_first();
+    // SIGUSR1 is used for interrupting polling, forcing that thread
+    // to process new non-socket events.
+    SignalHandler::set_handler(SIGUSR1,  sigc::ptr_fun(&do_nothing));
+
+    torrent::initialize(main_thread->poll());
 
     // Initialize option handlers after libtorrent to ensure
     // torrent::ConnectionManager* are valid etc.
     initialize_commands();
 
-    rpc::parse_command_multiple(rpc::make_target(),
-//       "set_name = $cat={$system.hostname=,:,$system.pid=}\n"
-       "set_name = \"$cat=$system.hostname=,:,$system.pid=\"\n"
+    if (OptionParser::has_flag('D', argc, argv)) {
+      rpc::call_command_set_value("method.use_deprecated.set", false);
+      control->core()->push_log("Disabled deprecated commands.");
+    }
+
+    if (OptionParser::has_flag('I', argc, argv)) {
+      rpc::call_command_set_value("method.use_intermediate.set", 0);
+      control->core()->push_log("Disabled intermediate commands.");
+    }
+
+    if (OptionParser::has_flag('K', argc, argv)) {
+      rpc::call_command_set_value("method.use_intermediate.set", 2);
+      control->core()->push_log("Allowing intermediate commands without xmlrpc.");
+    }
+
+    rpc::parse_command_multiple
+      (rpc::make_target(),
+//        "method.insert = test.value,value\n"
+//        "method.insert = test.value2,value,6\n"
+
+//        "method.insert = test.string,string,6\n"
+//       "method.insert = test.bool,bool,true\n"
+
+       "method.insert = test.method.simple,simple,\"print=simple_test_,$argument.0=\"\n"
+
+       "method.insert = event.download.inserted,multi\n"
+       "method.insert = event.download.inserted_new,multi\n"
+       "method.insert = event.download.inserted_session,multi\n"
+       "method.insert = event.download.erased,multi\n"
+       "method.insert = event.download.opened,multi\n"
+       "method.insert = event.download.closed,multi\n"
+       "method.insert = event.download.resumed,multi\n"
+       "method.insert = event.download.paused,multi\n"
+       
+       "method.insert = event.download.finished,multi\n"
+       "method.insert = event.download.hash_done,multi\n"
+       "method.insert = event.download.hash_failed,multi\n"
+       "method.insert = event.download.hash_final_failed,multi\n"
+       "method.insert = event.download.hash_removed,multi\n"
+       "method.insert = event.download.hash_queued,multi\n"
+
+       "method.set_key = event.download.inserted,         1_connect_logs, d.initialize_logs=\n"
+       "method.set_key = event.download.inserted_new,     1_prepare, \"branch=d.state=,view.set_visible=started,view.set_visible=stopped ;d.save_full_session=\"\n"
+       "method.set_key = event.download.inserted_session, 1_prepare, \"branch=d.state=,view.set_visible=started,view.set_visible=stopped\"\n"
+
+       "method.set_key = event.download.erased, !_download_list, ui.unfocus_download=\n"
+       "method.set_key = event.download.erased, ~_delete_tied, d.delete_tied=\n"
+
+       "method.insert = group.insert_persistent_view,simple|const,"
+       "view.add=$argument.0=,view.persistent=$argument.0=,\"group.insert=$argument.0=,$argument.0=\"\n"
+
+       // Allow setting 'group2.view' as constant, so that we can't
+       // modify the value. And look into the possibility of making
+       // 'const' use non-heap memory, as we know they can't be
+       // erased.
+
+       // TODO: Remember to ensure it doesn't get restarted by watch
+       // dir, etc. Set ignore commands, or something.
+
+       "group.insert = seeding,seeding\n"
+
+       "session.name = \"$cat=$system.hostname=,:,$system.pid=\"\n"
 
        // Currently not doing any sorting on main.
-       "view_add = main\n"
-       "view_add = default\n"
+       "view.add = main\n"
+       "view.add = default\n"
 
-       "view_add = name\n"
-       "view_sort_new = name,name\n"
-       "view_sort_current = name,name\n"
+       "view.add = name\n"
+       "view.sort_new     = name,less=d.name=\n"
+       "view.sort_current = name,less=d.name=\n"
 
-       "view_add = started\n"
-       "view_filter = started,started\n"
-       "view_filter_on = started,start,stop\n"
-       "view_sort_new = started,name\n"
-       "view_sort_current = started,name\n"
+       "view.add = active\n"
+       "view.filter = active,false=\n"
 
-       "view_add = stopped\n"
-       "view_filter = stopped,stopped\n"
-       "view_filter_on = stopped,start,stop\n"
-       "view_sort_new = stopped,name\n"
-       "view_sort_current = stopped,name\n"
+       "view.add = started\n"
+       "view.filter = started,false=\n"
+       "view.event_added   = started,\"view.set_not_visible=stopped ;d.state.set=1 ;scheduler.simple.added=\"\n"
+       "view.event_removed = started,\"view.set_visible=stopped ;scheduler.simple.removed=\"\n"
 
-       "view_add = complete\n"
-       "view_filter = complete,complete\n"
-       "view_filter_on = complete,hash_done,finished\n"
-       "view_sort_new = complete,state_changed\n"
-       "view_sort_current = complete,state_changed_reverse\n"
+       "view.add = stopped\n"
+       "view.filter = stopped,false=\n"
+       "view.event_added   = stopped,\"view.set_not_visible=started ;d.state.set=0\"\n"
+       "view.event_removed = stopped,view.set_visible=started\n"
 
-       "view_add = incomplete\n"
-       "view_filter = incomplete,incomplete\n"
-       "view_filter_on = incomplete,hash_done,finished\n"
-       "view_sort_new = incomplete,state_changed\n"
-       "view_sort_current = incomplete,state_changed_reverse\n"
+       "view.add = complete\n"
+       "view.filter = complete,d.complete=\n"
+       "view.filter_on    = complete,event.download.hash_done,event.download.hash_failed,event.download.hash_final_failed,event.download.finished\n"
+       "view.sort_new     = complete,less=d.state_changed=\n"
+       "view.sort_current = complete,less=d.state_changed=\n"
+
+       "view.add = incomplete\n"
+       "view.filter = incomplete,not=$d.complete=\n"
+       "view.filter_on    = incomplete,event.download.hash_done,event.download.hash_failed,"
+       "event.download.hash_final_failed,event.download.finished\n"
+       "view.sort_new     = incomplete,less=d.state_changed=\n"
+       "view.sort_current = incomplete,less=d.state_changed=\n"
 
        // The hashing view does not include stopped torrents.
-       "view_add = hashing\n"
-       "view_filter = hashing,hashing\n"
-       "view_filter_on = hashing,hash_queued,hash_removed,hash_done\n"
-       "view_sort_new = hashing,state_changed\n"
-       "view_sort_current = hashing,state_changed\n"
+       "view.add = hashing\n"
+       "view.filter = hashing,d.hashing=\n"
+       "view.filter_on = hashing,event.download.hash_queued,event.download.hash_removed,"
+       "event.download.hash_done,event.download.hash_failed,event.download.hash_final_failed\n"
+//        "view.sort_new     = hashing,less=d.state_changed=\n"
+//        "view.sort_current = hashing,less=d.state_changed=\n"
 
-       "view_add = seeding\n"
-       "view_filter = seeding,started,complete\n"
-       "view_filter_on = seeding,start,stop\n"
-       "view_sort_new = seeding,state_changed\n"
-       "view_sort_current = seeding,state_changed_reverse\n"
+       "view.add = seeding\n"
+       "view.filter = seeding,\"and=d.state=,d.complete=\"\n"
+       "view.filter_on    = seeding,event.download.resumed,event.download.paused,event.download.finished\n"
+       "view.sort_new     = seeding,less=d.state_changed=\n"
+       "view.sort_current = seeding,less=d.state_changed=\n"
 
-       // Changing these will bork the (non-existant) scheduler.
-       "view_add = scheduler\n"
-       "view_sort_new = scheduler,state_changed\n" // add started?
-       "view_sort_current = scheduler,state_changed\n"
+       "schedule2 = view.main,10,10,\"view.sort=main,20\"\n"
+       "schedule2 = view.name,10,10,\"view.sort=name,20\"\n"
 
-       //    "schedule = scheduler,10,10,download_scheduler=\n"
+       "schedule2 = session_save,1200,1200,session.save=\n"
+       "schedule2 = low_diskspace,5,60,close_low_diskspace=500M\n"
+       "schedule2 = prune_file_status,3600,86400,system.file_status_cache.prune=\n"
 
-       "schedule = view_main,10,10,\"view_sort=main,20\"\n"
-       "schedule = view_name,10,10,\"view_sort=name,20\"\n"
-       //     "schedule = view_started,10,10,view_sort=started,5\n"
-       //     "schedule = view_stopped,10,10,view_sort=stopped,5\n"
-       //     "schedule = view_complete,10,10,view_sort=complete,5\n"
-       //     "schedule = view_incomplete,10,10,view_sort=incomplete,5\n"
-
-       "schedule = session_save,1800,1800,session_save=\n"
-       "schedule = low_diskspace,5,60,close_low_diskspace=500M\n"
-
-       "encryption=allow_incoming,prefer_plaintext,enable_retry\n"
+       "protocol.encryption.set=allow_incoming,prefer_plaintext,enable_retry\n"
     );
+
+    // Functions that might not get depracted as they are nice for
+    // configuration files, and thus might do with just some
+    // cleanup.
+    CMD2_REDIRECT_GENERIC("upload_rate",   "throttle.global_up.max_rate.set_kb");
+    CMD2_REDIRECT_GENERIC("download_rate", "throttle.global_down.max_rate.set_kb");
+
+    CMD2_REDIRECT_GENERIC("ratio.enable",     "group.seeding.ratio.enable");
+    CMD2_REDIRECT_GENERIC("ratio.disable",    "group.seeding.ratio.disable");
+    CMD2_REDIRECT_GENERIC("ratio.min",        "group2.seeding.ratio.min");
+    CMD2_REDIRECT_GENERIC("ratio.max",        "group2.seeding.ratio.max");
+    CMD2_REDIRECT_GENERIC("ratio.upload",     "group2.seeding.ratio.upload");
+    CMD2_REDIRECT_GENERIC("ratio.min.set",    "group2.seeding.ratio.min.set");
+    CMD2_REDIRECT_GENERIC("ratio.max.set",    "group2.seeding.ratio.max.set");
+    CMD2_REDIRECT_GENERIC("ratio.upload.set", "group2.seeding.ratio.upload.set");
+
+    CMD2_REDIRECT_GENERIC("encryption", "protocol.encryption.set");
+    CMD2_REDIRECT_GENERIC("encoding_list", "encoding.add");
+
+    CMD2_REDIRECT_GENERIC("connection_leech", "protocol.connection.leech.set");
+    CMD2_REDIRECT_GENERIC("connection_seed", "protocol.connection.seed.set");
+
+    CMD2_REDIRECT        ("min_peers", "throttle.min_peers.normal.set");
+    CMD2_REDIRECT        ("max_peers", "throttle.max_peers.normal.set");
+    CMD2_REDIRECT        ("min_peers_seed", "throttle.min_peers.seed.set");
+    CMD2_REDIRECT        ("max_peers_seed", "throttle.max_peers.seed.set");
+
+    CMD2_REDIRECT        ("max_uploads", "throttle.max_uploads.set");
+
+    CMD2_REDIRECT        ("max_uploads_div",      "throttle.max_uploads.div.set");
+    CMD2_REDIRECT        ("max_uploads_global",   "throttle.max_uploads.global.set");
+    CMD2_REDIRECT        ("max_downloads_div",    "throttle.max_downloads.div.set");
+    CMD2_REDIRECT        ("max_downloads_global", "throttle.max_downloads.global.set");
+
+    CMD2_REDIRECT_GENERIC("max_memory_usage", "pieces.memory.max.set");
+
+    CMD2_REDIRECT        ("bind",       "network.bind_address.set");
+    CMD2_REDIRECT        ("ip",         "network.local_address.set");
+    CMD2_REDIRECT        ("port_range", "network.port_range.set");
+
+    CMD2_REDIRECT_GENERIC("dht",      "dht.mode.set");
+    CMD2_REDIRECT_GENERIC("dht_port", "dht.port.set");
+
+    CMD2_REDIRECT        ("port_random", "network.port_random.set");
+    CMD2_REDIRECT        ("proxy_address", "network.proxy_address.set");
+
+    CMD2_REDIRECT_GENERIC("directory", "directory.default.set");
+    CMD2_REDIRECT_GENERIC("session",   "session.path.set");
+
+    CMD2_REDIRECT        ("key_layout", "keys.layout.set");
+
+    // Deprecated commands. Don't use these anymore.
+
+    if (rpc::call_command_value("method.use_intermediate") == 1) {
+      CMD2_REDIRECT_GENERIC("execute", "execute2");
+
+      CMD2_REDIRECT_GENERIC("schedule", "schedule2");
+      CMD2_REDIRECT_GENERIC("schedule_remove", "schedule_remove2");
+
+    } else if (rpc::call_command_value("method.use_intermediate") == 2) {
+      // Allow for use in config files, etc, just don't export it.
+      CMD2_REDIRECT_GENERIC_NO_EXPORT("execute", "execute2");
+
+      CMD2_REDIRECT_GENERIC_NO_EXPORT("schedule", "schedule2");
+      CMD2_REDIRECT_GENERIC_NO_EXPORT("schedule_remove", "schedule_remove2");
+    }
+
+    if (rpc::call_command_value("method.use_deprecated")) {
+      // Deprecated in 0.7.0:
+
+      CMD2_REDIRECT_GENERIC("system.method.insert", "method.insert");
+      CMD2_REDIRECT_GENERIC("system.method.erase", "method.erase");
+      CMD2_REDIRECT_GENERIC("system.method.get", "method.get");
+      CMD2_REDIRECT_GENERIC("system.method.set", "method.set");
+      CMD2_REDIRECT_GENERIC("system.method.list_keys", "method.list_keys");
+      CMD2_REDIRECT_GENERIC("system.method.has_key", "method.has_key");
+      CMD2_REDIRECT_GENERIC("system.method.set_key", "method.set_key");
+
+      CMD2_REDIRECT        ("get_directory", "directory.default");
+      CMD2_REDIRECT_GENERIC("set_directory", "directory.default.set");
+
+      CMD2_REDIRECT        ("get_session", "session.path");
+      CMD2_REDIRECT_GENERIC("set_session", "session.path.set");
+
+      CMD2_REDIRECT        ("session_save", "session.save");
+
+      CMD2_REDIRECT        ("get_handshake_log", "log.handshake");
+      CMD2_REDIRECT_GENERIC("set_handshake_log", "log.handshake.set");
+      CMD2_REDIRECT        ("get_log.tracker", "log.tracker");
+      CMD2_REDIRECT_GENERIC("set_log.tracker", "log.tracker.set");
+
+      CMD2_REDIRECT        ("get_name", "session.name");
+      CMD2_REDIRECT_GENERIC("set_name", "session.name.set");
+
+      CMD2_REDIRECT        ("system.file_allocate", "system.file.allocate");
+      CMD2_REDIRECT        ("system.file_allocate.set", "system.file.allocate.set");
+      CMD2_REDIRECT        ("get_max_file_size", "system.file.max_size");
+      CMD2_REDIRECT_GENERIC("set_max_file_size", "system.file.max_size.set");
+      CMD2_REDIRECT        ("get_split_file_size", "system.file.split_size");
+      CMD2_REDIRECT_GENERIC("set_split_file_size", "system.file.split_size.set");
+      CMD2_REDIRECT        ("get_split_suffix", "system.file.split_suffix");
+      CMD2_REDIRECT_GENERIC("set_split_suffix", "system.file.split_suffix.set");
+
+      CMD2_REDIRECT        ("get_timeout_sync", "pieces.sync.timeout");
+      CMD2_REDIRECT_GENERIC("set_timeout_sync", "pieces.sync.timeout.set");
+      CMD2_REDIRECT        ("get_timeout_safe_sync", "pieces.sync.timeout_safe");
+      CMD2_REDIRECT_GENERIC("set_timeout_safe_sync", "pieces.sync.timeout_safe.set");
+
+      CMD2_REDIRECT_GENERIC("get_preload_type", "pieces.preload.type");
+      CMD2_REDIRECT_GENERIC("get_preload_min_size", "pieces.preload.min_size");
+      CMD2_REDIRECT_GENERIC("get_preload_required_rate", "pieces.preload.min_rate");
+      CMD2_REDIRECT_GENERIC("set_preload_type", "pieces.preload.type.set");
+      CMD2_REDIRECT_GENERIC("set_preload_min_size", "pieces.preload.min_size.set");
+      CMD2_REDIRECT_GENERIC("set_preload_required_rate", "pieces.preload.min_rate.set");
+      CMD2_REDIRECT_GENERIC("get_stats_preloaded", "pieces.stats_preloaded");
+      CMD2_REDIRECT_GENERIC("get_stats_not_preloaded", "pieces.stats_not_preloaded");
+
+      CMD2_REDIRECT_GENERIC("get_safe_sync", "pieces.sync.always_safe");
+      CMD2_REDIRECT_GENERIC("set_safe_sync", "pieces.sync.always_safe.set");
+
+      CMD2_REDIRECT        ("get_memory_usage",     "pieces.memory.current");
+      CMD2_REDIRECT_GENERIC("get_max_memory_usage", "pieces.memory.max");
+      CMD2_REDIRECT_GENERIC("set_max_memory_usage", "pieces.memory.max.set");
+
+      CMD2_REDIRECT_GENERIC("load", "load.normal");
+      CMD2_REDIRECT_GENERIC("load_verbose", "load.verbose");
+      CMD2_REDIRECT_GENERIC("load_start", "load.start");
+      CMD2_REDIRECT_GENERIC("load_start_verbose", "load.start_verbose");
+
+      CMD2_REDIRECT_GENERIC("load_raw", "load.raw");
+      CMD2_REDIRECT_GENERIC("load_raw_start", "load.raw_start");
+      CMD2_REDIRECT_GENERIC("load_raw_verbose", "load.raw_verbose");
+
+      CMD2_REDIRECT_GENERIC("get_connection_leech", "protocol.connection.leech");
+      CMD2_REDIRECT_GENERIC("get_connection_seed",  "protocol.connection.seed");
+      CMD2_REDIRECT_GENERIC("set_connection_leech", "protocol.connection.leech.set");
+      CMD2_REDIRECT_GENERIC("set_connection_seed",  "protocol.connection.seed.set");
+
+      //
+      // Throttle:
+      //
+
+      CMD2_REDIRECT_GENERIC("throttle_up", "throttle.up");
+      CMD2_REDIRECT_GENERIC("throttle_down", "throttle.down");
+      CMD2_REDIRECT_GENERIC("throttle_ip", "throttle.ip");
+
+      CMD2_REDIRECT_GENERIC("get_throttle_up_max", "throttle.up.max");
+      CMD2_REDIRECT_GENERIC("get_throttle_up_rate", "throttle.up.rate");
+      CMD2_REDIRECT_GENERIC("get_throttle_down_max", "throttle.down.max");
+      CMD2_REDIRECT_GENERIC("get_throttle_down_rate", "throttle.down.rate");
+
+      CMD2_REDIRECT_GENERIC("set_min_peers", "throttle.min_peers.normal.set");
+      CMD2_REDIRECT_GENERIC("set_max_peers", "throttle.max_peers.normal.set");
+      CMD2_REDIRECT_GENERIC("set_min_peers_seed", "throttle.min_peers.seed.set");
+      CMD2_REDIRECT_GENERIC("set_max_peers_seed", "throttle.max_peers.seed.set");
+
+      CMD2_REDIRECT_GENERIC("set_max_uploads", "throttle.max_uploads.set");
+
+      CMD2_REDIRECT_GENERIC("set_max_uploads_div", "throttle.max_uploads.div.set");
+      CMD2_REDIRECT_GENERIC("set_max_uploads_global", "throttle.max_uploads.global.set");
+      CMD2_REDIRECT_GENERIC("set_max_downloads_div", "throttle.max_downloads.div.set");
+      CMD2_REDIRECT_GENERIC("set_max_downloads_global", "throttle.max_downloads.global.set");
+
+      CMD2_REDIRECT        ("get_min_peers", "throttle.min_peers.normal");
+      CMD2_REDIRECT        ("get_max_peers", "throttle.max_peers.normal");
+      CMD2_REDIRECT        ("get_min_peers_seed", "throttle.min_peers.seed");
+      CMD2_REDIRECT        ("get_max_peers_seed", "throttle.max_peers.seed");
+
+      CMD2_REDIRECT        ("get_max_uploads", "throttle.max_uploads");
+
+      CMD2_REDIRECT        ("get_max_uploads_div", "throttle.max_uploads.div");
+      CMD2_REDIRECT        ("get_max_uploads_global", "throttle.max_uploads.global");
+      CMD2_REDIRECT        ("get_max_downloads_div", "throttle.max_downloads.div");
+      CMD2_REDIRECT        ("get_max_downloads_global", "throttle.max_downloads.global");
+
+      CMD2_REDIRECT        ("get_up_rate", "throttle.global_up.rate");
+      CMD2_REDIRECT        ("get_up_total", "throttle.global_up.total");
+      CMD2_REDIRECT        ("get_upload_rate", "throttle.global_up.max_rate");
+      CMD2_REDIRECT_GENERIC("set_upload_rate", "throttle.global_up.max_rate.set");
+      CMD2_REDIRECT        ("get_down_rate", "throttle.global_down.rate");
+      CMD2_REDIRECT        ("get_down_total", "throttle.global_down.total");
+      CMD2_REDIRECT        ("get_download_rate", "throttle.global_down.max_rate");
+      CMD2_REDIRECT_GENERIC("set_download_rate", "throttle.global_down.max_rate.set");
+
+      //
+      // Network:
+      //
+
+      CMD2_REDIRECT        ("get_send_buffer_size", "network.send_buffer.size");
+      CMD2_REDIRECT_GENERIC("set_send_buffer_size", "network.send_buffer.size.set");
+      CMD2_REDIRECT        ("get_receive_buffer_size", "network.receive_buffer.size");
+      CMD2_REDIRECT_GENERIC("set_receive_buffer_size", "network.receive_buffer.size.set");
+
+      CMD2_REDIRECT_GENERIC("set_bind", "network.bind_address.set");
+      CMD2_REDIRECT        ("get_bind", "network.bind_address");
+
+      CMD2_REDIRECT_GENERIC("set_ip", "network.local_address.set");
+      CMD2_REDIRECT        ("get_ip", "network.local_address");
+
+      CMD2_REDIRECT        ("get_port_range", "network.port_range");
+      CMD2_REDIRECT_GENERIC("set_port_range", "network.port_range.set");
+
+      CMD2_REDIRECT        ("get_port_random", "network.port_random");
+      CMD2_REDIRECT_GENERIC("set_port_random", "network.port_random.set");
+
+      CMD2_REDIRECT        ("port_open", "network.port_open.set");
+      CMD2_REDIRECT        ("get_port_open", "network.port_open");
+      CMD2_REDIRECT_GENERIC("set_port_open", "network.port_open.set");
+
+      CMD2_REDIRECT_GENERIC("set_proxy_address", "network.proxy_address.set");
+      CMD2_REDIRECT        ("get_proxy_address", "network.proxy_address");
+
+      CMD2_REDIRECT        ("scgi_port", "network.scgi.open_port");
+      CMD2_REDIRECT        ("scgi_local", "network.scgi.open_local");
+
+      CMD2_REDIRECT        ("scgi_dont_route", "network.scgi.dont_route.set");
+      CMD2_REDIRECT_GENERIC("set_scgi_dont_route", "network.scgi.dont_route.set");
+      CMD2_REDIRECT        ("get_scgi_dont_route", "network.scgi.dont_route");
+
+      CMD2_REDIRECT        ("get_max_open_sockets", "network.max_open_sockets");
+
+      CMD2_REDIRECT        ("get_max_open_files", "network.max_open_files");
+      CMD2_REDIRECT_GENERIC("set_max_open_files", "network.max_open_files.set");
+
+      //
+      // XMLRPC stuff:
+      //
+
+      CMD2_REDIRECT_GENERIC("xmlrpc_dialect", "network.xmlrpc.dialect.set");
+      CMD2_REDIRECT_GENERIC("set_xmlrpc_dialect", "network.xmlrpc.dialect.set");
+
+      CMD2_REDIRECT_GENERIC("xmlrpc_size_limit", "network.xmlrpc.size_limit.set");
+      CMD2_REDIRECT        ("get_xmlrpc_size_limit", "network.xmlrpc.size_limit");
+      CMD2_REDIRECT_GENERIC("set_xmlrpc_size_limit", "network.xmlrpc.size_limit.set");
+
+      //
+      // HTTP stuff:
+      //
+
+      CMD2_REDIRECT_GENERIC("http_capath", "network.http.capath.set");
+      CMD2_REDIRECT        ("get_http_capath", "network.http.capath");
+      CMD2_REDIRECT_GENERIC("set_http_capath", "network.http.capath.set");
+
+      CMD2_REDIRECT_GENERIC("http_cacert", "network.http.cacert.set");
+      CMD2_REDIRECT        ("get_http_cacert", "network.http.cacert");
+      CMD2_REDIRECT_GENERIC("set_http_cacert", "network.http.cacert.set");
+
+      CMD2_REDIRECT        ("get_max_open_http", "network.http.max_open");
+      CMD2_REDIRECT_GENERIC("set_max_open_http", "network.http.max_open.set");
+
+      CMD2_REDIRECT_GENERIC("http_proxy", "network.http.proxy_address.set");
+      CMD2_REDIRECT        ("get_http_proxy", "network.http.proxy_address");
+      CMD2_REDIRECT_GENERIC("set_http_proxy", "network.http.proxy_address.set");
+
+      CMD2_REDIRECT        ("peer_exchange", "protocol.pex.set");
+      CMD2_REDIRECT        ("get_peer_exchange", "protocol.pex");
+      CMD2_REDIRECT_GENERIC("set_peer_exchange", "protocol.pex.set");
+
+      //
+      // Trackers:
+      //
+
+      CMD2_REDIRECT        ("tracker_numwant", "trackers.numwant.set");
+      CMD2_REDIRECT        ("get_tracker_numwant", "trackers.numwant");
+      CMD2_REDIRECT_GENERIC("set_tracker_numwant", "trackers.numwant.set");
+      
+      CMD2_REDIRECT        ("use_udp_trackers", "trackers.use_udp.set");
+      CMD2_REDIRECT        ("get_use_udp_trackers", "trackers.use_udp");
+      CMD2_REDIRECT_GENERIC("set_use_udp_trackers", "trackers.use_udp.set");
+
+      //
+      // DHT stuff
+      //
+
+      CMD2_REDIRECT        ("dht_add_node", "dht.add_node");
+      CMD2_REDIRECT        ("dht_statistics", "dht.statistics");
+      CMD2_REDIRECT        ("get_dht_port", "dht.port");
+      CMD2_REDIRECT_GENERIC("set_dht_port", "dht.port.set");
+      CMD2_REDIRECT        ("get_dht_throttle", "dht.throttle.name");
+      CMD2_REDIRECT_GENERIC("set_dht_throttle", "dht.throttle.name.set");
+
+      //
+      // Various system stuff:
+      //
+
+      CMD2_REDIRECT        ("get_session_lock", "session.use_lock");
+      CMD2_REDIRECT_GENERIC("set_session_lock", "session.use_lock.set");
+      CMD2_REDIRECT        ("get_session_on_completion", "session.on_completion");
+      CMD2_REDIRECT_GENERIC("set_session_on_completion", "session.on_completion.set");
+
+      CMD2_REDIRECT        ("hash_read_ahead", "system.hash.read_ahead.set");
+      CMD2_REDIRECT        ("get_hash_read_ahead", "system.hash.read_ahead");
+      CMD2_REDIRECT_GENERIC("set_hash_read_ahead", "system.hash.read_ahead.set");
+
+      CMD2_REDIRECT        ("hash_interval", "system.hash.interval.set");
+      CMD2_REDIRECT        ("get_hash_interval", "system.hash.interval");
+      CMD2_REDIRECT_GENERIC("set_hash_interval", "system.hash.interval.set");
+
+      CMD2_REDIRECT        ("hash_max_tries", "system.hash.max_tries.set");
+      CMD2_REDIRECT        ("get_hash_max_tries", "system.hash.max_tries");
+      CMD2_REDIRECT_GENERIC("set_hash_max_tries", "system.hash.max_tries.set");
+
+      CMD2_REDIRECT        ("check_hash", "pieces.hash.on_completion.set");
+      CMD2_REDIRECT        ("get_check_hash", "pieces.hash.on_completion");
+      CMD2_REDIRECT_GENERIC("set_check_hash", "pieces.hash.on_completion.set");
+
+      //
+      // Download:
+      //
+
+      CMD2_REDIRECT        ("d.get_hash", "d.hash");
+      CMD2_REDIRECT        ("d.get_local_id", "d.local_id");
+      CMD2_REDIRECT        ("d.get_local_id_html", "d.local_id_html");
+      CMD2_REDIRECT        ("d.get_bitfield", "d.bitfield");
+      CMD2_REDIRECT        ("d.get_base_path", "d.base_path");
+      CMD2_REDIRECT        ("d.get_base_filename", "d.base_filename");
+
+      CMD2_REDIRECT        ("d.get_name", "d.name");
+      CMD2_REDIRECT        ("d.get_creation_date", "d.creation_date");
+
+      CMD2_REDIRECT        ("d.get_peer_exchange", "d.peer_exchange");
+
+      CMD2_REDIRECT        ("d.get_up_rate", "d.up.rate");
+      CMD2_REDIRECT        ("d.get_up_total", "d.up.total");
+      CMD2_REDIRECT        ("d.get_down_rate", "d.down.rate");
+      CMD2_REDIRECT        ("d.get_down_total", "d.down.total");
+      CMD2_REDIRECT        ("d.get_skip_rate", "d.skip.rate");
+      CMD2_REDIRECT        ("d.get_skip_total", "d.skip.total");
+
+      //
+      CMD2_REDIRECT        ("d.get_bytes_done", "d.bytes_done");
+      CMD2_REDIRECT        ("d.get_chunk_size", "d.chunk_size");
+      CMD2_REDIRECT        ("d.get_chunks_hashed", "d.chunks_hashed");
+      CMD2_REDIRECT        ("d.get_complete", "d.complete");
+      CMD2_REDIRECT        ("d.get_completed_bytes", "d.completed_bytes");
+      CMD2_REDIRECT        ("d.get_completed_chunks", "d.completed_chunks");
+      CMD2_REDIRECT        ("d.get_connection_current", "d.connection_current");
+      CMD2_REDIRECT        ("d.get_connection_leech", "d.connection_leech");
+      CMD2_REDIRECT        ("d.get_connection_seed", "d.connection_seed");
+      CMD2_REDIRECT        ("d.get_custom", "d.custom");
+      CMD2_REDIRECT        ("d.get_custom1", "d.custom1");
+      CMD2_REDIRECT        ("d.get_custom2", "d.custom2");
+      CMD2_REDIRECT        ("d.get_custom3", "d.custom3");
+      CMD2_REDIRECT        ("d.get_custom4", "d.custom4");
+      CMD2_REDIRECT        ("d.get_custom5", "d.custom5");
+      CMD2_REDIRECT        ("d.get_custom_throw", "d.custom_throw");
+      CMD2_REDIRECT        ("d.get_directory", "d.directory");
+      CMD2_REDIRECT        ("d.get_directory_base", "d.directory_base");
+      CMD2_REDIRECT        ("d.get_free_diskspace", "d.free_diskspace");
+      CMD2_REDIRECT        ("d.get_hashing", "d.hashing");
+      CMD2_REDIRECT        ("d.get_hashing_failed", "d.hashing_failed");
+      CMD2_REDIRECT        ("d.get_ignore_commands", "d.ignore_commands");
+      CMD2_REDIRECT        ("d.get_left_bytes", "d.left_bytes");
+      CMD2_REDIRECT        ("d.get_loaded_file", "d.loaded_file");
+      CMD2_REDIRECT        ("d.get_max_file_size", "d.max_file_size");
+      CMD2_REDIRECT        ("d.get_max_size_pex", "d.max_size_pex");
+      CMD2_REDIRECT        ("d.get_message", "d.message");
+      CMD2_REDIRECT        ("d.get_mode", "d.mode");
+      CMD2_REDIRECT        ("d.get_peers_accounted", "d.peers_accounted");
+      CMD2_REDIRECT        ("d.get_peers_complete", "d.peers_complete");
+      CMD2_REDIRECT        ("d.get_peers_connected", "d.peers_connected");
+      CMD2_REDIRECT        ("d.get_peers_max", "d.peers_max");
+      CMD2_REDIRECT        ("d.get_peers_min", "d.peers_min");
+      CMD2_REDIRECT        ("d.get_peers_not_connected", "d.peers_not_connected");
+      CMD2_REDIRECT        ("d.get_priority", "d.priority");
+      CMD2_REDIRECT        ("d.get_priority_str", "d.priority_str");
+      CMD2_REDIRECT        ("d.get_ratio", "d.ratio");
+      CMD2_REDIRECT        ("d.get_size_bytes", "d.size_bytes");
+      CMD2_REDIRECT        ("d.get_size_chunks", "d.size_chunks");
+      CMD2_REDIRECT        ("d.get_size_files", "d.size_files");
+      CMD2_REDIRECT        ("d.get_size_pex", "d.size_pex");
+      CMD2_REDIRECT        ("d.get_state", "d.state");
+      CMD2_REDIRECT        ("d.get_state_changed", "d.state_changed");
+      CMD2_REDIRECT        ("d.get_state_counter", "d.state_counter");
+      CMD2_REDIRECT        ("d.get_throttle_name", "d.throttle_name");
+      CMD2_REDIRECT        ("d.get_tied_to_file", "d.tied_to_file");
+      CMD2_REDIRECT        ("d.get_tracker_focus", "d.tracker_focus");
+      CMD2_REDIRECT        ("d.get_tracker_numwant", "d.tracker_numwant");
+      CMD2_REDIRECT        ("d.get_tracker_size", "d.tracker_size");
+      CMD2_REDIRECT        ("d.get_uploads_max", "d.uploads_max");
+
+      CMD2_REDIRECT        ("d.set_connection_current", "d.connection_current.set");
+      CMD2_REDIRECT        ("d.set_custom", "d.custom.set");
+      CMD2_REDIRECT        ("d.set_custom1", "d.custom1.set");
+      CMD2_REDIRECT        ("d.set_custom2", "d.custom2.set");
+      CMD2_REDIRECT        ("d.set_custom3", "d.custom3.set");
+      CMD2_REDIRECT        ("d.set_custom4", "d.custom4.set");
+      CMD2_REDIRECT        ("d.set_custom5", "d.custom5.set");
+      CMD2_REDIRECT        ("d.set_directory", "d.directory.set");
+      CMD2_REDIRECT        ("d.set_directory_base", "d.directory_base.set");
+      CMD2_REDIRECT        ("d.set_hashing_failed", "d.hashing_failed.set");
+      CMD2_REDIRECT        ("d.set_ignore_commands", "d.ignore_commands.set");
+      CMD2_REDIRECT        ("d.set_max_file_size", "d.max_file_size.set");
+      CMD2_REDIRECT        ("d.set_message", "d.message.set");
+      CMD2_REDIRECT        ("d.set_peers_max", "d.peers_max.set");
+      CMD2_REDIRECT        ("d.set_peers_min", "d.peers_min.set");
+      CMD2_REDIRECT        ("d.set_priority", "d.priority.set");
+      CMD2_REDIRECT        ("d.set_throttle_name", "d.throttle_name.set");
+      CMD2_REDIRECT        ("d.set_tied_to_file", "d.tied_to_file.set");
+      CMD2_REDIRECT        ("d.set_tracker_numwant", "d.tracker_numwant.set");
+      CMD2_REDIRECT        ("d.set_uploads_max", "d.uploads_max.set");
+
+      CMD2_REDIRECT        ("create_link", "d.create_link");
+      CMD2_REDIRECT        ("delete_link", "d.delete_link");
+      CMD2_REDIRECT        ("delete_tied", "d.delete_tied");
+
+      //
+      // Tracker:
+      //
+
+      CMD2_REDIRECT_TRACKER("t.get_group", "t.group");
+      CMD2_REDIRECT_TRACKER("t.get_id", "t.id");
+      CMD2_REDIRECT_TRACKER("t.get_min_interval", "t.min_interval");
+      CMD2_REDIRECT_TRACKER("t.get_normal_interval", "t.normal_interval");
+      CMD2_REDIRECT_TRACKER("t.get_scrape_complete", "t.scrape_complete");
+      CMD2_REDIRECT_TRACKER("t.get_scrape_downloaded", "t.scrape_downloaded");
+      CMD2_REDIRECT_TRACKER("t.get_scrape_incomplete", "t.scrape_incomplete");
+      CMD2_REDIRECT_TRACKER("t.get_scrape_time_last", "t.scrape_time_last");
+      CMD2_REDIRECT_TRACKER("t.get_type", "t.type");
+      CMD2_REDIRECT_TRACKER("t.get_url", "t.url");
+      CMD2_REDIRECT_TRACKER("t.set_enabled", "t.is_enabled.set");
+
+      //
+      // File:
+      //
+
+      CMD2_REDIRECT_FILE   ("f.get_completed_chunks", "f.completed_chunks");
+      CMD2_REDIRECT_FILE   ("f.get_frozen_path", "f.frozen_path");
+      CMD2_REDIRECT_FILE   ("f.get_last_touched", "f.last_touched");
+      CMD2_REDIRECT_FILE   ("f.get_match_depth_next", "f.match_depth_next");
+      CMD2_REDIRECT_FILE   ("f.get_match_depth_prev", "f.match_depth_prev");
+      CMD2_REDIRECT_FILE   ("f.get_offset", "f.offset");
+      CMD2_REDIRECT_FILE   ("f.get_path", "f.path");
+      CMD2_REDIRECT_FILE   ("f.get_path_components", "f.path_components");
+      CMD2_REDIRECT_FILE   ("f.get_path_depth", "f.path_depth");
+      CMD2_REDIRECT_FILE   ("f.get_priority", "f.priority");
+      CMD2_REDIRECT_FILE   ("f.get_range_first", "f.range_first");
+      CMD2_REDIRECT_FILE   ("f.get_range_second", "f.range_second");
+      CMD2_REDIRECT_FILE   ("f.get_size_bytes", "f.size_bytes");
+      CMD2_REDIRECT_FILE   ("f.get_size_chunks", "f.size_chunks");
+      CMD2_REDIRECT_FILE   ("f.set_priority", "f.priority.set");
+      CMD2_REDIRECT_FILE   ("fi.get_filename_last", "fi.filename_last");
+
+      //
+      // Peer:
+      //
+
+      CMD2_REDIRECT        ("p.get_address", "p.address");
+      CMD2_REDIRECT        ("p.get_client_version", "p.client_version");
+      CMD2_REDIRECT        ("p.get_completed_percent", "p.completed_percent");
+      CMD2_REDIRECT        ("p.get_down_rate", "p.down_rate");
+      CMD2_REDIRECT        ("p.get_down_total", "p.down_total");
+      CMD2_REDIRECT        ("p.get_id", "p.id");
+      CMD2_REDIRECT        ("p.get_id_html", "p.id_html");
+      CMD2_REDIRECT        ("p.get_options_str", "p.options_str");
+      CMD2_REDIRECT        ("p.get_peer_rate", "p.peer_rate");
+      CMD2_REDIRECT        ("p.get_peer_total", "p.peer_total");
+      CMD2_REDIRECT        ("p.get_port", "p.port");
+      CMD2_REDIRECT        ("p.get_up_rate", "p.up_rate");
+      CMD2_REDIRECT        ("p.get_up_total", "p.up_total");
+
+      //
+      // View:
+      //
+
+      CMD2_REDIRECT_GENERIC("view_add", "view.add");
+      CMD2_REDIRECT_GENERIC("view_filter", "view.filter");
+      CMD2_REDIRECT_GENERIC("view_filter_on", "view.filter_on");
+      CMD2_REDIRECT_GENERIC("view_list", "view.list");
+      CMD2_REDIRECT_GENERIC("view_set", "view.set");
+      CMD2_REDIRECT_GENERIC("view_sort", "view.sort");
+      CMD2_REDIRECT_GENERIC("view_sort_current", "view.sort_current");
+      CMD2_REDIRECT_GENERIC("view_sort_new", "view.sort_new");
+
+      // Rename these to avoid conflicts with old style.
+      CMD2_REDIRECT_GENERIC("d.multicall", "d.multicall2");
+
+      CMD2_REDIRECT_GENERIC("to_gm_time", "convert.gm_time");
+      CMD2_REDIRECT_GENERIC("to_gm_date", "convert.gm_date");
+      CMD2_REDIRECT_GENERIC("to_time", "convert.time");
+      CMD2_REDIRECT_GENERIC("to_date", "convert.date");
+      CMD2_REDIRECT_GENERIC("to_elapsed_time", "convert.elapsed_time");
+      CMD2_REDIRECT_GENERIC("to_kb", "convert.kb");
+      CMD2_REDIRECT_GENERIC("to_mb", "convert.mb");
+      CMD2_REDIRECT_GENERIC("to_xb", "convert.xb");
+      CMD2_REDIRECT_GENERIC("to_throttle", "convert.throttle");
+
+      CMD2_REDIRECT_GENERIC("execute_throw", "execute.throw");
+      CMD2_REDIRECT_GENERIC("execute_nothrow", "execute.nothrow");
+      CMD2_REDIRECT_GENERIC("execute_raw", "execute.raw");
+      CMD2_REDIRECT_GENERIC("execute_raw_nothrow", "execute.raw_nothrow");
+      CMD2_REDIRECT_GENERIC("execute_capture", "execute.capture");
+      CMD2_REDIRECT_GENERIC("execute_capture_nothrow", "execute.capture_nothrow");
+    }
+
+    int firstArg = parse_options(control, argc, argv);
 
     if (OptionParser::has_flag('n', argc, argv))
       control->core()->push_log("Ignoring ~/.rtorrent.rc.");
     else
       rpc::parse_command_single(rpc::make_target(), "try_import = ~/.rtorrent.rc");
 
-    int firstArg = parse_options(control, argc, argv);
-
     control->initialize();
 
     // Load session torrents and perform scheduled tasks to ensure
     // session torrents are loaded before arg torrents.
+    control->dht_manager()->load_dht_cache();
     load_session_torrents(control);
     rak::priority_queue_perform(&taskScheduler, cachedTime);
 
@@ -256,6 +828,8 @@ main(int argc, char** argv) {
     control->display()->adjust_layout();
     control->display()->receive_update();
 
+    worker_thread->start_thread();
+
     while (!control->is_shutdown_completed()) {
       if (control->is_shutdown_received())
         control->handle_shutdown();
@@ -266,25 +840,22 @@ main(int argc, char** argv) {
       rak::priority_queue_perform(&taskScheduler, cachedTime);
 
       // Do shutdown check before poll, not after.
-      control->core()->get_poll_manager()->poll(client_next_timeout(control));
+      main_thread->poll_manager()->poll(client_next_timeout(control));
     }
 
     control->core()->download_list()->session_save();
-
     control->cleanup();
 
   } catch (std::exception& e) {
-    display::Canvas::cleanup();
-
-    // Safe to delete here? Seem to cause problems if cleanup hasn't
-    // been called.
-    //delete control;
+    control->cleanup_exception();
 
     std::cout << "rtorrent: " << e.what() << std::endl;
     return -1;
   }
 
   delete control;
+  delete worker_thread;
+  delete main_thread;
 
   return 0;
 }
@@ -295,6 +866,8 @@ do_panic(int signum) {
   // loops.
   SignalHandler::set_default(signum);
   display::Canvas::cleanup();
+
+  // Use printf here instead...
 
   std::cout << "Caught " << SignalHandler::as_string(signum) << ", dumping stack:" << std::endl;
   
@@ -312,6 +885,19 @@ do_panic(int signum) {
   std::cout << "Stack dump not enabled." << std::endl;
 #endif
   
+  // Dumping virtual memory map information to file:
+  // char dump_path[256];
+  // snprintf(dump_path, 256, "./rtorrent.map.%u", getpid());
+
+  // int dump_fd = open(dump_path, O_RDWR | O_CREAT);
+
+  // if (dump_fd == -1) {
+  //   printf("Could not create vmmap dump file '%s'.", dump_path);
+  //   goto do_panic_exit;
+  // }
+
+// do_panic_exit:
+
   if (signum == SIGBUS)
     std::cout << "A bus error probably means you ran out of diskspace." << std::endl;
 

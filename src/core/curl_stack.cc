@@ -43,6 +43,7 @@
 
 #include "rak/functional.h"
 #include "curl_get.h"
+#include "curl_socket.h"
 #include "curl_stack.h"
 
 namespace core {
@@ -51,6 +52,15 @@ CurlStack::CurlStack() :
   m_handle((void*)curl_multi_init()),
   m_active(0),
   m_maxActive(32) {
+
+  m_taskTimeout.set_slot(rak::mem_fn(this, &CurlStack::receive_timeout));
+
+#if (LIBCURL_VERSION_NUM >= 0x071000)
+  curl_multi_setopt((CURLM*)m_handle, CURLMOPT_TIMERDATA, this);
+  curl_multi_setopt((CURLM*)m_handle, CURLMOPT_TIMERFUNCTION, &CurlStack::set_timeout);
+#endif
+  curl_multi_setopt((CURLM*)m_handle, CURLMOPT_SOCKETDATA, this);
+  curl_multi_setopt((CURLM*)m_handle, CURLMOPT_SOCKETFUNCTION, &CurlSocket::receive_socket);
 }
 
 CurlStack::~CurlStack() {
@@ -58,6 +68,7 @@ CurlStack::~CurlStack() {
     front()->close();
 
   curl_multi_cleanup((CURLM*)m_handle);
+  priority_queue_erase(&taskScheduler, &m_taskTimeout);
 }
 
 CurlGet*
@@ -65,16 +76,31 @@ CurlStack::new_object() {
   return new CurlGet(this);
 }
 
+CurlSocket*
+CurlStack::new_socket(int fd) {
+  CurlSocket* socket = new CurlSocket(fd, this);
+  curl_multi_assign((CURLM*)m_handle, fd, socket);
+  return socket;
+}
+
 void
-CurlStack::perform() {
+CurlStack::receive_action(CurlSocket* socket, int events) {
   CURLMcode code;
 
   do {
     int count;
-    code = curl_multi_perform((CURLM*)m_handle, &count);
+#if (LIBCURL_VERSION_NUM >= 0x071003)
+    code = curl_multi_socket_action((CURLM*)m_handle, socket != NULL ? socket->file_descriptor() : CURL_SOCKET_TIMEOUT, events, &count);
+#else
+    code = curl_multi_socket((CURLM*)m_handle, socket != NULL ? socket->file_descriptor() : CURL_SOCKET_TIMEOUT, &count);
+#endif
 
     if (code > 0)
-      throw torrent::internal_error("Error calling curl_multi_perform.");
+      throw torrent::internal_error("Error calling curl_multi_socket_action.");
+
+    // Socket might be removed when cleaning handles below, future calls should not use it.
+    socket = NULL;
+    events = 0;
 
     if ((unsigned int)count != size()) {
       // Done with some handles.
@@ -83,31 +109,42 @@ CurlStack::perform() {
 
       while ((msg = curl_multi_info_read((CURLM*)m_handle, &t)) != NULL) {
         if (msg->msg != CURLMSG_DONE)
-          throw torrent::internal_error("CurlStack::perform() msg->msg != CURLMSG_DONE.");
+          throw torrent::internal_error("CurlStack::receive_action() msg->msg != CURLMSG_DONE.");
 
-        iterator itr = std::find_if(begin(), end(), rak::equal(msg->easy_handle, std::mem_fun(&CurlGet::handle)));
-
-        if (itr == end())
-          throw torrent::internal_error("Could not find CurlGet with the right easy_handle.");
-        
-        if (msg->data.result == CURLE_OK)
-          (*itr)->signal_done().emit();
-        else
-          (*itr)->signal_failed().emit(curl_easy_strerror(msg->data.result));
+	transfer_done(msg->easy_handle, msg->data.result == CURLE_OK ? NULL : curl_easy_strerror(msg->data.result));
       }
+
+      if (empty())
+        priority_queue_erase(&taskScheduler, &m_taskTimeout);
     }
 
   } while (code == CURLM_CALL_MULTI_PERFORM);
 }
 
-unsigned int
-CurlStack::fdset(fd_set* readfds, fd_set* writefds, fd_set* exceptfds) {
-  int maxFd = 0;
+void
+CurlStack::transfer_done(void* handle, const char* msg) {
+  iterator itr = std::find_if(begin(), end(), rak::equal(handle, std::mem_fun(&CurlGet::handle)));
 
-  if (curl_multi_fdset((CURLM*)m_handle, readfds, writefds, exceptfds, &maxFd) != 0)
-    throw torrent::internal_error("Error calling curl_multi_fdset.");
+  if (itr == end())
+    throw torrent::internal_error("Could not find CurlGet with the right easy_handle.");
 
-  return std::max(maxFd, 0);
+  if (msg == NULL)
+    (*itr)->signal_done().emit();
+  else
+    (*itr)->signal_failed().emit(msg);
+}
+
+void
+CurlStack::receive_timeout() {
+  receive_action(NULL, 0);
+
+  // Sometimes libcurl forgets to reset the timeout. Try to poll the value in that case, or use 10 seconds.
+  if (!empty() && !m_taskTimeout.is_queued()) {
+    long timeout;
+    curl_multi_timeout((CURLM*)m_handle, &timeout);
+    priority_queue_insert(&taskScheduler, &m_taskTimeout, 
+                          cachedTime + rak::timer::from_milliseconds(std::max<unsigned long>(timeout, 10000)));
+  }
 }
 
 void
@@ -137,6 +174,10 @@ CurlStack::add_get(CurlGet* get) {
   
   if (curl_multi_add_handle((CURLM*)m_handle, get->handle()) > 0)
     throw torrent::internal_error("Error calling curl_multi_add_handle.");
+
+#if (LIBCURL_VERSION_NUM < 0x071000)
+  receive_timeout();
+#endif
 }
 
 void
@@ -177,6 +218,18 @@ CurlStack::global_init() {
 void
 CurlStack::global_cleanup() {
   curl_global_cleanup();
+}
+
+// TODO: Is this function supposed to set a per-handle timeout, or is
+// it the shortest timeout amongst all handles?
+int
+CurlStack::set_timeout(void* handle, long timeout_ms, void* userp) {
+  CurlStack* stack = (CurlStack*)userp;
+
+  priority_queue_erase(&taskScheduler, &stack->m_taskTimeout);
+  priority_queue_insert(&taskScheduler, &stack->m_taskTimeout, cachedTime + rak::timer::from_milliseconds(timeout_ms));
+
+  return 0;
 }
 
 }

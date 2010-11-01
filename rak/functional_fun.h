@@ -139,6 +139,26 @@ private:
   std::auto_ptr<base_type> m_base;
 };
 
+template <typename Result, typename Arg2>
+class function2<Result, void, Arg2> {
+public:
+  typedef Result                             result_type;
+  typedef function_base1<Result, Arg2>       base_type;
+
+  bool                is_valid() const     { return m_base.get() != NULL; }
+
+  void                set(base_type* base) { m_base = std::auto_ptr<base_type>(base); }
+  base_type*          release()            { return m_base.release(); }
+
+  Result operator () (Arg2 arg2)           { return (*m_base)(arg2); }
+
+  template <typename Discard>
+  Result operator () (Discard discard, Arg2 arg2) { return (*m_base)(arg2); }
+
+private:
+  std::auto_ptr<base_type> m_base;
+};
+
 template <typename Result, typename Arg1, typename Arg2, typename Arg3>
 class function3 {
 public:
@@ -298,6 +318,22 @@ public:
   virtual ~mem_fn0_b1_t() {}
   
   virtual Result operator () () { return (m_object->*m_func)(m_arg1); }
+
+private:
+  Object*    m_object;
+  Func       m_func;
+  const Arg1 m_arg1;
+};
+
+template <typename Object, typename Result, typename Arg1, typename Arg2>
+class mem_fn1_b1_t : public function_base1<Result, Arg2> {
+public:
+  typedef Result (Object::*Func)(Arg1, Arg2);
+
+  mem_fn1_b1_t(Object* object, Func func, const Arg1 arg1) : m_object(object), m_func(func), m_arg1(arg1) {}
+  virtual ~mem_fn1_b1_t() {}
+  
+  virtual Result operator () (const Arg2 arg2) { return (m_object->*m_func)(m_arg1, arg2); }
 
 private:
   Object*    m_object;
@@ -514,6 +550,12 @@ template <typename Arg1, typename Result, typename Object>
 inline function_base0<Result>*
 bind_mem_fn(Object* object, Result (Object::*func)(Arg1), const Arg1 arg1) {
   return new mem_fn0_b1_t<Object, Result, Arg1>(object, func, arg1);
+}
+
+template <typename Arg1, typename Arg2, typename Result, typename Object>
+inline function_base1<Result, Arg2>*
+bind_mem_fn(Object* object, Result (Object::*func)(Arg1, Arg2), const Arg1 arg1) {
+  return new mem_fn1_b1_t<Object, Result, Arg1, Arg2>(object, func, arg1);
 }
 
 template <typename Arg1, typename Arg2, typename Result, typename Object>

@@ -43,7 +43,7 @@
 #include "core/manager.h"
 #include "core/download_store.h"
 #include "core/view_manager.h"
-#include "core/scheduler.h"
+#include "core/dht_manager.h"
 
 #include "display/canvas.h"
 #include "display/window.h"
@@ -53,28 +53,27 @@
 #include "rpc/command_scheduler.h"
 #include "rpc/parse_commands.h"
 #include "rpc/scgi.h"
+#include "rpc/object_storage.h"
 #include "ui/root.h"
 
 #include "control.h"
 
 Control::Control() :
-  m_shutdownReceived(false),
-  m_shutdownQuick(false),
-
   m_ui(new ui::Root()),
   m_display(new display::Manager()),
   m_input(new input::Manager()),
   m_inputStdin(new input::InputEvent(STDIN_FILENO)),
 
   m_commandScheduler(new rpc::CommandScheduler()),
+  m_objectStorage(new rpc::object_storage()),
 
-  m_scgi(NULL),
-
-  m_tick(0) {
+  m_tick(0),
+  m_shutdownReceived(false),
+  m_shutdownQuick(false) {
 
   m_core        = new core::Manager();
-  m_viewManager = new core::ViewManager(m_core->download_list());
-  m_scheduler   = new core::Scheduler(m_core->download_list());
+  m_viewManager = new core::ViewManager();
+  m_dhtManager  = new core::DhtManager();
 
   m_inputStdin->slot_pressed(sigc::mem_fun(m_input, &input::Manager::pressed));
 
@@ -87,14 +86,15 @@ Control::~Control() {
   delete m_inputStdin;
   delete m_input;
 
-  delete m_commandScheduler;
-
   delete m_viewManager;
 
   delete m_ui;
   delete m_display;
   delete m_core;
-  delete m_scheduler;
+  delete m_dhtManager;
+
+  delete m_commandScheduler;
+  delete m_objectStorage;
 }
 
 void
@@ -104,28 +104,27 @@ Control::initialize() {
   display::Window::slot_unschedule(rak::make_mem_fun(m_display, &display::Manager::unschedule));
   display::Window::slot_adjust(rak::make_mem_fun(m_display, &display::Manager::adjust_layout));
 
-  m_core->get_poll_manager()->get_http_stack()->set_user_agent(USER_AGENT);
+  m_core->http_stack()->set_user_agent(USER_AGENT);
 
   m_core->initialize_second();
   m_core->listen_open();
-  m_core->download_store()->enable(rpc::call_command_value("get_session_lock"));
+  m_core->download_store()->enable(rpc::call_command_value("session.use_lock"));
 
   m_core->set_hashing_view(*m_viewManager->find_throw("hashing"));
-  m_scheduler->set_view(*m_viewManager->find_throw("scheduler"));
 
   m_ui->init(this);
 
-  m_inputStdin->insert(m_core->get_poll_manager()->get_torrent_poll());
+  m_inputStdin->insert(main_thread->poll());
 }
 
 void
 Control::cleanup() {
-  delete m_scgi;    m_scgi = NULL;
+  //  delete m_scgi; m_scgi = NULL;
   rpc::xmlrpc.cleanup();
 
   priority_queue_erase(&taskScheduler, &m_taskShutdown);
 
-  m_inputStdin->remove(m_core->get_poll_manager()->get_torrent_poll());
+  m_inputStdin->remove(main_thread->poll());
 
   m_core->download_store()->disable();
 
@@ -139,8 +138,24 @@ Control::cleanup() {
 }
 
 void
+Control::cleanup_exception() {
+  //  delete m_scgi; m_scgi = NULL;
+
+  display::Canvas::cleanup();
+}
+
+bool
+Control::is_shutdown_completed() {
+  return m_shutdownQuick && !worker_thread->is_active() && torrent::is_inactive();
+}
+
+void
 Control::handle_shutdown() {
   if (!m_shutdownQuick) {
+    // Temporary hack:
+    if (worker_thread->is_active())
+      worker_thread->queue_item(&ThreadBase::stop_thread);
+
     torrent::connection_manager()->listen_close();
     m_core->shutdown(false);
 
@@ -148,6 +163,10 @@ Control::handle_shutdown() {
       priority_queue_insert(&taskScheduler, &m_taskShutdown, cachedTime + rak::timer::from_seconds(5));
 
   } else {
+    // Temporary hack:
+    if (worker_thread->is_active())
+      worker_thread->queue_item(&ThreadBase::stop_thread);
+
     m_core->shutdown(true);
   }
 
@@ -155,7 +174,3 @@ Control::handle_shutdown() {
   m_shutdownReceived = false;
 }
 
-torrent::Poll*
-Control::poll() {
-  return m_core->get_poll_manager()->get_torrent_poll();
-}

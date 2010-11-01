@@ -86,7 +86,7 @@ parse_command_execute(target_type target, torrent::Object* object) {
   if (object->is_list()) {
     // For now, until we can flag the lists we want executed and those
     // we can't, disable recursion completely.
-    for (torrent::Object::list_type::iterator itr = object->as_list().begin(), last = object->as_list().end(); itr != last; itr++) {
+    for (torrent::Object::list_iterator itr = object->as_list().begin(), last = object->as_list().end(); itr != last; itr++) {
       if (itr->is_list())
         continue;
 
@@ -117,7 +117,7 @@ parse_command(target_type target, const char* first, const char* last) {
     throw torrent::input_error("Could not find '='.");
 
   torrent::Object args;
-  first = parse_whole_list(first + 1, last, &args);
+  first = parse_whole_list(first + 1, last, &args, &parse_is_delim_command);
 
   // Find the last character that is part of this command, skipping
   // the whitespace at the end. This ensures us that the caller
@@ -138,15 +138,19 @@ parse_command(target_type target, const char* first, const char* last) {
   return std::make_pair(commands.call_command(key.c_str(), args, target), first);
 }
 
-void
+torrent::Object
 parse_command_multiple(target_type target, const char* first, const char* last) {
+  parse_command_type result;
+
   while (first != last) {
     // Should we check the return value? Probably not necessary as
     // parse_args throws on unquoted multi-word input.
-    parse_command_type result = parse_command(target, first, last);
+    result = parse_command(target, first, last);
 
     first = result.second;
   }
+
+  return result.first;
 }
 
 parse_command_type
@@ -218,5 +222,62 @@ parse_command_name(const char* first, const char* last, std::string* dest) {
 
   return first;
 }
+
+//
+//
+//
+
+// Temp until it can be moved somewhere better...
+const torrent::Object
+command_function_call(const torrent::raw_string& cmd, target_type target, const torrent::Object& args) {
+  rpc::command_base::stack_type stack;
+  torrent::Object* last_stack;
+
+  if (args.is_list())
+    last_stack = rpc::command_base::push_stack(args.as_list(), &stack);
+  else if (args.type() != torrent::Object::TYPE_NONE)
+    last_stack = rpc::command_base::push_stack(&args, &args + 1, &stack);
+  else
+    last_stack = rpc::command_base::push_stack(NULL, NULL, &stack);
+
+  try {
+    torrent::Object result = parse_command_multiple(target, cmd.begin(), cmd.end());
+
+    rpc::command_base::pop_stack(&stack, last_stack);
+    return result;
+
+  } catch (torrent::bencode_error& e) {
+    rpc::command_base::pop_stack(&stack, last_stack);
+    throw e;
+  }
+}
+
+const torrent::Object
+command_function_multi_call(const torrent::Object::map_type& cmd, target_type target, const torrent::Object& args) {
+  rpc::command_base::stack_type stack;
+  torrent::Object* last_stack;
+
+  if (args.is_list())
+    last_stack = rpc::command_base::push_stack(args.as_list(), &stack);
+  else if (args.type() != torrent::Object::TYPE_NONE)
+    last_stack = rpc::command_base::push_stack(&args, &args + 1, &stack);
+  else
+    last_stack = rpc::command_base::push_stack(NULL, NULL, &stack);
+
+  try {
+    for (torrent::Object::map_const_iterator itr = cmd.begin(), last = cmd.end(); itr != last; itr++) {
+      const std::string& cmd_str = itr->second.as_string();
+      parse_command_multiple(target, cmd_str.c_str(), cmd_str.c_str() + cmd_str.size());
+    }
+
+  } catch (torrent::bencode_error& e) {
+    rpc::command_base::pop_stack(&stack, last_stack);
+    throw e;
+  }
+
+  rpc::command_base::pop_stack(&stack, last_stack);
+  return torrent::Object();
+}
+
 
 }

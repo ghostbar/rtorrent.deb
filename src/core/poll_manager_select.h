@@ -45,15 +45,21 @@ namespace torrent {
 
 namespace core {
 
-class PollManagerSelect : public PollManager {
+class lt_cacheline_aligned PollManagerSelect : public PollManager {
 public:
   static PollManagerSelect* create(int maxOpenSockets);
   ~PollManagerSelect();
 
   void                poll(rak::timer timeout);
+  void                poll_simple(rak::timer timeout);
 
 private:
-  PollManagerSelect(torrent::Poll* p) : PollManager(p) {}
+  PollManagerSelect(torrent::Poll* p);
+
+  unsigned int        m_setSize;
+  fd_set*             m_readSet;
+  fd_set*             m_writeSet;
+  fd_set*             m_errorSet;
 };
 
 }

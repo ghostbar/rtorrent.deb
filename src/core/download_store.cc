@@ -51,6 +51,8 @@
 #include <torrent/resume.h>
 #include <torrent/object_stream.h>
 
+#include "utils/directory.h"
+
 #include "download.h"
 #include "download_store.h"
 
@@ -69,11 +71,12 @@ DownloadStore::enable(bool lock) {
   else
     m_lockfile.set_path(std::string());
 
-  if (!m_lockfile.try_lock())
+  if (!m_lockfile.try_lock()) {
     if (rak::error_number::current().is_bad_path())
       throw torrent::input_error("Could not lock session directory: \"" + m_path + "\", " + rak::error_number::current().c_str());
     else
       throw torrent::input_error("Could not lock session directory: \"" + m_path + "\", held by \"" + m_lockfile.locked_by_as_string() + "\".");
+  }
 }
 
 void
@@ -95,45 +98,74 @@ DownloadStore::set_path(const std::string& path) {
     m_path = rak::path_expand(path);
 }
 
-void
-DownloadStore::save(Download* d) {
-  if (!is_enabled())
-    return;
+bool
+DownloadStore::write_bencode(const std::string& filename, const torrent::Object& obj, uint32_t skip_mask) {
+  torrent::Object tmp;
+  std::fstream output(filename.c_str(), std::ios::out | std::ios::trunc);
 
-  std::fstream f((create_filename(d) + ".new").c_str(), std::ios::out | std::ios::trunc);
+  if (!output.is_open())
+    goto download_store_save_error;
 
-  if (!f.is_open())
-    return;
+  torrent::object_write_bencode(&output, &obj, skip_mask);
 
-  // Move this somewhere else?
-  d->bencode()->get_key("rtorrent").insert_key("total_uploaded", d->download()->up_rate()->total());
-  d->bencode()->get_key("rtorrent").insert_key("chunks_done", d->download()->file_list()->completed_chunks());
+  if (!output.good())
+    goto download_store_save_error;
 
-  torrent::Object& resumeObject = d->download()->bencode()->get_key("libtorrent_resume");
-
-  torrent::resume_save_addresses(*d->download(), resumeObject);
-  torrent::resume_save_file_priorities(*d->download(), resumeObject);
-  torrent::resume_save_tracker_settings(*d->download(), resumeObject);
-
-  f << *d->bencode();
-
-  if (!f.good())
-    return;
-
-  f.close();
+  output.close();
 
   // Test the new file, to ensure it is a valid bencode string.
-  f.open((create_filename(d) + ".new").c_str(), std::ios::in);
+  output.open(filename.c_str(), std::ios::in);
+  output >> tmp;
 
-  torrent::Object tmp;
-  f >> tmp;
+  if (!output.good())
+    goto download_store_save_error;
 
-  if (!f.good())
-    return;
+  output.close();
+  return true;
 
-  f.close();
+download_store_save_error:
+  output.close();
+  return false;
+}
 
-  ::rename((create_filename(d) + ".new").c_str(), create_filename(d).c_str());
+bool
+DownloadStore::save(Download* d, int flags) {
+  if (!is_enabled())
+    return true;
+
+  torrent::Object* resume_base   = &d->download()->bencode()->get_key("libtorrent_resume");
+  torrent::Object* rtorrent_base = &d->download()->bencode()->get_key("rtorrent");
+
+  // Move this somewhere else?
+  rtorrent_base->insert_key("chunks_done", d->download()->file_list()->completed_chunks());
+  rtorrent_base->insert_key("total_uploaded", d->info()->up_rate()->total());
+
+  // Don't save for completed torrents when we've cleared the uncertain_pieces.
+  torrent::resume_save_progress(*d->download(), *resume_base);
+  torrent::resume_save_uncertain_pieces(*d->download(), *resume_base);
+
+  torrent::resume_save_addresses(*d->download(), *resume_base);
+  torrent::resume_save_file_priorities(*d->download(), *resume_base);
+  torrent::resume_save_tracker_settings(*d->download(), *resume_base);
+
+  // Temp fixing of all flags, move to a better place:
+  resume_base->set_flags(torrent::Object::flag_session_data);
+  rtorrent_base->set_flags(torrent::Object::flag_session_data);
+
+  std::string base_filename = create_filename(d);
+
+  if (!write_bencode(base_filename + ".libtorrent_resume.new", *resume_base, 0) ||
+      !write_bencode(base_filename + ".rtorrent.new", *rtorrent_base, 0))
+    return false;
+
+  ::rename((base_filename + ".libtorrent_resume.new").c_str(), (base_filename + ".libtorrent_resume").c_str());
+  ::rename((base_filename + ".rtorrent.new").c_str(), (base_filename + ".rtorrent").c_str());
+  
+  if (!(flags & flag_skip_static) &&
+      write_bencode(base_filename + ".new", *d->bencode(), torrent::Object::flag_session_data))
+    ::rename((base_filename + ".new").c_str(), base_filename.c_str());
+
+  return true;
 }
 
 void
@@ -141,7 +173,15 @@ DownloadStore::remove(Download* d) {
   if (!is_enabled())
     return;
 
+  ::unlink((create_filename(d) + ".libtorrent_resume").c_str());
+  ::unlink((create_filename(d) + ".rtorrent").c_str());
   ::unlink(create_filename(d).c_str());
+}
+
+// This also needs to check that it isn't a directory.
+bool
+not_correct_format(const utils::directory_entry& entry) {
+  return !DownloadStore::is_correct_format(entry.d_name);
 }
 
 utils::Directory
@@ -151,16 +191,16 @@ DownloadStore::get_formated_entries() {
 
   utils::Directory d(m_path);
 
-  if (!d.update())
+  if (!d.update(utils::Directory::update_hide_dot))
     throw torrent::storage_error("core::DownloadStore::update() could not open directory \"" + m_path + "\"");
 
-  d.erase(std::remove_if(d.begin(), d.end(), std::not1(std::ptr_fun(&DownloadStore::is_correct_format))), d.end());
+  d.erase(std::remove_if(d.begin(), d.end(), std::ptr_fun(&not_correct_format)), d.end());
 
   return d;
 }
 
 bool
-DownloadStore::is_correct_format(std::string f) {
+DownloadStore::is_correct_format(const std::string& f) {
   if (f.size() != 48 || f.substr(40) != ".torrent")
     return false;
 
@@ -174,7 +214,7 @@ DownloadStore::is_correct_format(std::string f) {
 
 std::string
 DownloadStore::create_filename(Download* d) {
-  return m_path + rak::transform_hex(d->download()->info_hash().begin(), d->download()->info_hash().end()) + ".torrent";
+  return m_path + rak::transform_hex(d->info()->hash().begin(), d->info()->hash().end()) + ".torrent";
 }
 
 }

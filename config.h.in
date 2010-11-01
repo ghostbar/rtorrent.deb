@@ -33,6 +33,9 @@
 /* defined if ncurses wide character support is available */
 #undef HAVE_NCURSESW
 
+/* Define to 1 if you have the `posix_memalign' function. */
+#undef HAVE_POSIX_MEMALIGN
+
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
 
@@ -72,6 +75,13 @@
 /* Support for XMLRPC-C. */
 #undef HAVE_XMLRPC_C
 
+/* Define to the sub-directory in which libtool stores uninstalled libraries.
+   */
+#undef LT_OBJDIR
+
+/* Largest L1 cache size we know of */
+#undef LT_SMP_CACHE_BYTES
+
 /* Name of package */
 #undef PACKAGE
 
@@ -86,6 +96,9 @@
 
 /* Define to the one symbol short name of this package. */
 #undef PACKAGE_TARNAME
+
+/* Define to the home page for this package. */
+#undef PACKAGE_URL
 
 /* Define to the version of this package. */
 #undef PACKAGE_VERSION
@@ -122,3 +135,6 @@
 
 /* Null-wrapper if unused attribute is unsupported */
 #undef __UNUSED
+
+/* LibTorrent defined cacheline aligned. */
+#undef lt_cacheline_aligned
