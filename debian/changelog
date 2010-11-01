@@ -1,3 +1,9 @@
+rtorrent (0.8.7-1) UNRELEASED; urgency=low
+
+  * New upstream version.
+
+ -- Rogério Brito <rbrito@ime.usp.br>  Mon, 01 Nov 2010 16:25:26 -0200
+
 rtorrent (0.8.6-1) unstable; urgency=low
 
   * New upstream stable version.
