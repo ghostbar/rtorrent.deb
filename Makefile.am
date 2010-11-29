@@ -1,7 +1,6 @@
 SUBDIRS = \
 	doc \
-	src \
-	test
+	src
 
 EXTRA_DIST= \
 	autogen.sh \

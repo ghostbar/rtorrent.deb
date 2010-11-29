@@ -6,10 +6,10 @@ Maintainer: Jose Luis Rivas <ghostbar@debian.org>
 DM-Upload-Allowed: yes
 Uploaders: Dmitry E. Oboukhov <unera@debian.org>,
 	Rogério Brito <rbrito@ime.usp.br>
-Build-Depends: debhelper (>= 7), libtorrent-dev (>= 0.12.6),
+Build-Depends: debhelper (>= 7.0.50~), libtorrent-dev (>= 0.12.7),
 	       libsigc++-2.0-dev, libcurl4-openssl-dev, libncursesw5-dev,
 	       bc, libxmlrpc-c3-dev
-Standards-Version: 3.8.3
+Standards-Version: 3.9.1
 Vcs-Git: git://git.debian.org/git/collab-maint/rtorrent.git
 Vcs-Browser: http://git.debian.org/?p=collab-maint/rtorrent.git
 Homepage: http://libtorrent.rakshasa.no/

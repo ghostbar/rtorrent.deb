@@ -1,8 +1,15 @@
-rtorrent (0.8.7-1) UNRELEASED; urgency=low
+rtorrent (0.8.7-1) experimental; urgency=low
 
+  [ Rogério Brito ]
   * New upstream version.
 
- -- Rogério Brito <rbrito@ime.usp.br>  Mon, 01 Nov 2010 16:25:26 -0200
+  [ Dmitry E. Oboukhov ]
+  * Standards-Version bumped to 3.9.1.
+  * Fixed B-D (libtorrent-dev 0.12.7).
+  * Installed forgotten manpage.
+  * Excluded tests from build process.
+
+ -- Dmitry E. Oboukhov <unera@debian.org>  Mon, 29 Nov 2010 10:49:02 +0300
 
 rtorrent (0.8.6-1) unstable; urgency=low
 
