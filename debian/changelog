@@ -1,3 +1,9 @@
+rtorrent (0.8.7-2) experimental; urgency=low
+
+  * Added curses into B-D list to fix FTBFS in experimental.
+
+ -- Dmitry E. Oboukhov <unera@debian.org>  Wed, 01 Dec 2010 09:40:11 +0300
+
 rtorrent (0.8.7-1) experimental; urgency=low
 
   [ Rogério Brito ]
