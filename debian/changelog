@@ -1,3 +1,23 @@
+rtorrent (0.8.7-4) unstable; urgency=low
+
+  * Upload to unstable.
+  * Add files to ignore for git's puposes.
+  * Don't remove the .pc directory as this confuses dpkg royally.
+  * Remove patches that are not relevant anymore.
+  * Leave the main tree unpatched to not confuse dpkg.
+  * Remove the removal of test/Makefile.
+  * Refresh debian/patches.
+  * Put a .patch extension on the patches in debian/patches.
+  * Build-depend on libxmlrpc-core-c3-dev instead of libxmlrpc-c3-dev.
+    Closes: #563075, #615161.
+  * Pass --parallel to dh, to enable parallel builds.
+  * Unapply patches after build
+  * Fix future FTBFS with ld.gold.
+  * Since we are rebuilding against a new librtorrent, this closes: #564525.
+  * Pass option --enable-ipv6 to configure. Closes: #490277.
+
+ -- Rogério Brito <rbrito@ime.usp.br>  Sun, 27 Feb 2011 12:13:34 -0300
+
 rtorrent (0.8.7-3) experimental; urgency=low
 
   * Enabled xml-rpc features.
