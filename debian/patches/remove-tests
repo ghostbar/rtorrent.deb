@@ -29,9 +29,9 @@ Forwarded: <no|not-needed|url proving that it has been forwarded>
 Reviewed-By: <name and email of someone who approved the patch>
 Last-Update: <YYYY-MM-DD>
 
---- rtorrent-0.8.7.orig/Makefile.in
-+++ rtorrent-0.8.7/Makefile.in
-@@ -239,8 +239,7 @@ top_builddir = @top_builddir@
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -239,8 +239,7 @@
  top_srcdir = @top_srcdir@
  SUBDIRS = \
  	doc \
@@ -41,8 +41,8 @@ Last-Update: <YYYY-MM-DD>
  
  EXTRA_DIST = \
  	autogen.sh \
---- rtorrent-0.8.7.orig/Makefile.am
-+++ rtorrent-0.8.7/Makefile.am
+--- a/Makefile.am
++++ b/Makefile.am
 @@ -1,7 +1,6 @@
  SUBDIRS = \
  	doc \
