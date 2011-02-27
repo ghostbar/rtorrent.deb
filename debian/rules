@@ -9,4 +9,4 @@ override_dh_clean:
 	rm -fr test/Makefile
 
 override_dh_auto_configure:
-	LD_FLAGS="$(LD_FLAGS)" dh_auto_configure -- --with-xmlrpc-c
+	LD_FLAGS="$(LD_FLAGS)" dh_auto_configure -- --with-xmlrpc-c --enable-ipv6
