@@ -1,3 +1,11 @@
+rtorrent (0.8.7-5) unstable; urgency=low
+
+  * Add patch to fix segfault with xmlrpc commands. Closes: #605863.
+  * Add patch to enable IPv6. Closes: #490277.
+  * Update series file.
+
+ -- Rogério Brito <rbrito@ime.usp.br>  Wed, 09 Mar 2011 20:16:36 -0300
+
 rtorrent (0.8.7-4) unstable; urgency=low
 
   * Upload to unstable.
