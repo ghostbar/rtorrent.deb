@@ -1,1 +1,3 @@
 remove-tests.patch
+r1185.patch
+rtorrent-0.8.7-ipv6-08.patch
