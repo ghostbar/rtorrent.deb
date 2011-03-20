@@ -1,3 +1,10 @@
+rtorrent (0.8.7-6) unstable; urgency=low
+
+  * Use Steinar's IPv6 patch instead of the "cooked one". Closes: #618275.
+  * Update the IPv6 patch metadata.
+
+ -- Rogério Brito <rbrito@ime.usp.br>  Sun, 20 Mar 2011 03:28:12 -0300
+
 rtorrent (0.8.7-5) unstable; urgency=low
 
   * Add patch to fix segfault with xmlrpc commands. Closes: #605863.
