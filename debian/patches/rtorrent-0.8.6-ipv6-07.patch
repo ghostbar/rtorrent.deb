@@ -1,7 +1,9 @@
 Description: Enable support for IPv6. Closes: #490277.
+Author: Steinar H. Gunderson <sesse@debian.org>
+Reviewed-By: Rogério Theodoro de Brito <rbrito@ime.usp.br>
 Bug-Debian: http://bugs.debian.org/490277
-Origin: http://libtorrent.rakshasa.no/ticket/1111
-Last-Update: 2011-03-09
+Origin: http://home.samfundet.no/~sesse/rtorrent-0.8.6-ipv6.patch
+Last-Update: 2011-03-20
 
 --- a/rak/socket_address.h
 +++ b/rak/socket_address.h
