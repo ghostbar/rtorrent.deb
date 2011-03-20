@@ -2,6 +2,7 @@ Description: Enable support for IPv6. Closes: #490277.
 Bug-Debian: http://bugs.debian.org/490277
 Origin: http://libtorrent.rakshasa.no/ticket/1111
 Last-Update: 2011-03-09
+
 --- a/rak/socket_address.h
 +++ b/rak/socket_address.h
 @@ -145,7 +145,7 @@
@@ -13,17 +14,17 @@ Last-Update: 2011-03-09
  
  class socket_address_inet {
  public:
-@@ -185,6 +185,10 @@
+@@ -184,6 +184,10 @@
+ 
    const sockaddr*     c_sockaddr() const                      { return reinterpret_cast<const sockaddr*>(&m_sockaddr); }
    const sockaddr_in*  c_sockaddr_inet() const                 { return &m_sockaddr; }
- 
++  
 +#ifdef RAK_USE_INET6
 +  socket_address_inet6 to_mapped_address() const;
 +#endif
-+
+ 
    bool                operator == (const socket_address_inet& rhs) const;
    bool                operator < (const socket_address_inet& rhs) const;
- 
 @@ -192,6 +196,52 @@
    struct sockaddr_in  m_sockaddr;
  };
@@ -218,7 +219,7 @@ Last-Update: 2011-03-09
 +  addr32[1] = 0;
 +  addr32[2] = htonl(0xffff);
 +  addr32[3] = m_sockaddr.sin_addr.s_addr;
-+
++  
 +  socket_address_inet6 sa;
 +  sa.clear();
 +  sa.set_address(*reinterpret_cast<in6_addr *>(addr32));
@@ -373,7 +374,7 @@ Last-Update: 2011-03-09
    
 --- a/src/core/curl_stack.cc
 +++ b/src/core/curl_stack.cc
-@@ -111,6 +111,22 @@
+@@ -111,6 +111,21 @@
          if (msg->msg != CURLMSG_DONE)
            throw torrent::internal_error("CurlStack::receive_action() msg->msg != CURLMSG_DONE.");
  
@@ -392,7 +393,6 @@ Last-Update: 2011-03-09
 +          }
 +        } else
 +#endif
-+
  	transfer_done(msg->easy_handle, msg->data.result == CURLE_OK ? NULL : curl_easy_strerror(msg->data.result));
        }
  
@@ -434,132 +434,6 @@ Last-Update: 2011-03-09
  
      m_canvas->print(x, y, "%.1f", (double)p->up_rate()->rate() / 1024); x += 7;
      m_canvas->print(x, y, "%.1f", (double)p->down_rate()->rate() / 1024); x += 7;
---- a/src/input/input_event.cc
-+++ b/src/input/input_event.cc
-@@ -36,10 +36,11 @@
- 
- #include "config.h"
- 
--#include <ncurses.h>
--
- #include "input_event.h"
- 
-+//ncurses.h must be included last since sys/mman.h on Solaris munges ERR.
-+#include <ncurses.h>
-+
- namespace input {
- 
- void
---- a/src/input/path_input.cc
-+++ b/src/input/path_input.cc
-@@ -42,7 +42,13 @@
- #include <rak/path.h>
- 
- #include <sys/types.h>
--#include <sys/dir.h>
-+
-+#ifdef __sun__
-+  #include <dirent.h>
-+  #include <sys/stat.h>
-+#else
-+  #include <sys/dir.h>
-+#endif
- 
- #include "path_input.h"
- 
-@@ -72,7 +78,11 @@
- 
- struct _transform_filename {
-   void operator () (utils::directory_entry& entry) {
-+#ifdef __sun__
-+    if (entry.d_type & S_IFDIR)
-+#else
-     if (entry.d_type == DT_DIR)
-+#endif
-       entry.d_name += '/';
-   }
- };
---- a/src/rpc/scgi.cc
-+++ b/src/rpc/scgi.cc
-@@ -88,7 +88,12 @@
-   char buffer[sizeof(sockaddr_un) + filename.size()];
-   sockaddr_un* sa = reinterpret_cast<sockaddr_un*>(buffer);
- 
-+#ifdef __sun__
-+  sa->sun_family = AF_UNIX;
-+#else
-   sa->sun_family = AF_LOCAL;
-+#endif
-+
-   std::memcpy(sa->sun_path, filename.c_str(), filename.size() + 1);
- 
-   if (!get_fd().open_local())
---- a/src/signal_handler.cc
-+++ b/src/signal_handler.cc
-@@ -39,6 +39,11 @@
- #include <stdexcept>
- #include "signal_handler.h"
- 
-+#ifdef __sun__
-+#include <iso/signal_iso.h>
-+//extern "C" void (*signal (int sig, void (*disp)(int)))(int);
-+#endif
-+
- SignalHandler::Slot SignalHandler::m_handlers[HIGHEST_SIGNAL];
- 
- void
---- a/src/utils/directory.cc
-+++ b/src/utils/directory.cc
-@@ -42,6 +42,10 @@
- #include <rak/path.h>
- #include <torrent/exceptions.h>
- 
-+#ifdef __sun__
-+#include <sys/stat.h>
-+#endif
-+
- #include "directory.h"
- 
- namespace utils {
-@@ -69,6 +73,9 @@
-     return false;
- 
-   struct dirent* entry;
-+#ifdef __sun__
-+  struct stat s;
-+#endif
- 
-   while ((entry = readdir(d)) != NULL) {
-     if ((flags & update_hide_dot) && entry->d_name[0] == '.')
-@@ -76,9 +83,16 @@
- 
-     iterator itr = base_type::insert(end(), value_type());
- 
-+#ifdef __sun__
-+    stat(entry->d_name, &s);
-+    itr->d_fileno = entry->d_ino;
-+    itr->d_type = s.st_mode;
-+#else
-     itr->d_fileno = entry->d_fileno;
--    itr->d_reclen = entry->d_reclen;
-+    //itr->d_reclen = entry->d_reclen; //This isn't used and screws up Solaris.
-+				       //It's ignore time.
-     itr->d_type   = entry->d_type;
-+#endif
- 
- #ifdef DIRENT_NAMLEN_EXISTS_FOOBAR
-     itr->d_name   = std::string(entry->d_name, entry->d_name + entry->d_namlen);
---- a/src/utils/directory.h
-+++ b/src/utils/directory.h
-@@ -49,7 +49,7 @@
- 
-   // The name and types should match POSIX.
-   uint32_t            d_fileno;
--  uint32_t            d_reclen;
-+  //uint32_t            d_reclen; //Not used. Messes with Solaris.
-   uint8_t             d_type;
- 
-   std::string         d_name;
 --- a/src/utils/socket_fd.cc
 +++ b/src/utils/socket_fd.cc
 @@ -71,6 +71,11 @@
