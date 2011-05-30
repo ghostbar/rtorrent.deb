@@ -1,3 +1,17 @@
+rtorrent (0.8.7-7) unstable; urgency=low
+
+  * [5afc0f0] Don't depend on libtorrent's changelogs. Closes: #623260.
+  * [a190a0a] Use correct make variable to avoid FTBFS with gold.
+  * [d48e213] Use wrap-and-sort to normalize the debian subdir.
+  * [003e77c] Use stricter build-dependency to avoid FTBFS and to
+    pick up IPv6 support.
+  * [bdec510] Make debian/copyright parseable by
+    `config-edit -application dpkg-copyright`.
+  * [7f1d2a6] Add years of copyright to my packaging of rtorrent.
+  * [cf198ef] Make sure the package conforms to policy 3.9.2.
+
+ -- Rogério Brito <rbrito@ime.usp.br>  Mon, 30 May 2011 03:31:08 -0300
+
 rtorrent (0.8.7-6) unstable; urgency=low
 
   * Use Steinar's IPv6 patch instead of the "cooked one". Closes: #618275.
