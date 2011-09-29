@@ -312,7 +312,7 @@ Last-Update: 2011-03-20
  torrent::Object
 --- a/src/core/curl_get.cc
 +++ b/src/core/curl_get.cc
-@@ -88,8 +88,20 @@
+@@ -91,8 +91,20 @@
    curl_easy_setopt(m_handle, CURLOPT_NOSIGNAL,       (long)1);
    curl_easy_setopt(m_handle, CURLOPT_FOLLOWLOCATION, (long)1);
    curl_easy_setopt(m_handle, CURLOPT_MAXREDIRS,      (long)5);
@@ -333,7 +333,7 @@ Last-Update: 2011-03-20
  
    m_stack->add_get(this);
  }
-@@ -107,6 +119,17 @@
+@@ -110,6 +122,17 @@
    m_handle = NULL;
  }
  
@@ -376,7 +376,7 @@ Last-Update: 2011-03-20
    
 --- a/src/core/curl_stack.cc
 +++ b/src/core/curl_stack.cc
-@@ -111,6 +111,21 @@
+@@ -112,6 +112,21 @@
          if (msg->msg != CURLMSG_DONE)
            throw torrent::internal_error("CurlStack::receive_action() msg->msg != CURLMSG_DONE.");
  

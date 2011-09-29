@@ -31,7 +31,7 @@ Last-Update: <YYYY-MM-DD>
 
 --- a/Makefile.in
 +++ b/Makefile.in
-@@ -239,8 +239,7 @@
+@@ -242,8 +242,7 @@
  top_srcdir = @top_srcdir@
  SUBDIRS = \
  	doc \
