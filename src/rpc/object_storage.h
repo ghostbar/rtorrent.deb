@@ -45,6 +45,7 @@
 #include <tr1/unordered_map>
 #include <torrent/object.h>
 
+#include "rak/unordered_vector.h"
 #include "command.h"
 #include "fixed_key.h"
 
@@ -55,9 +56,13 @@ struct object_storage_node {
   char            flags;
 };
 
-class object_storage : private std::tr1::unordered_map<fixed_key_type<64>, object_storage_node, hash_fixed_key_type> {
+typedef std::unordered_map<fixed_key_type<64>, object_storage_node, hash_fixed_key_type> object_storage_base_type;
+
+class object_storage : private object_storage_base_type {
 public:
-  typedef std::tr1::unordered_map<fixed_key_type<64>, object_storage_node, hash_fixed_key_type> base_type;
+  // Should really change rlookup_type into a set with pair values.
+  typedef object_storage_base_type                                              base_type;
+  typedef std::map<std::string, rak::unordered_vector<base_type::value_type*> > rlookup_type;
 
   using base_type::key_type;
   using base_type::value_type;
@@ -65,6 +70,9 @@ public:
   using base_type::const_iterator;
   using base_type::local_iterator;
   using base_type::const_local_iterator;
+
+  typedef rlookup_type::iterator              rlookup_iterator;
+  typedef rlookup_type::mapped_type::iterator rlookup_mapped_iterator;
 
   using base_type::begin;
   using base_type::end;
@@ -76,6 +84,8 @@ public:
   using base_type::max_bucket_count;
   using base_type::load_factor;
 
+  // Verify rlookup is static / const.
+
   using base_type::clear;
   using base_type::find;
   using base_type::erase;
@@ -84,14 +94,16 @@ public:
   static const unsigned int flag_bool_type     = 0x2;
   static const unsigned int flag_value_type    = 0x3;
   static const unsigned int flag_string_type   = 0x4;
-  static const unsigned int flag_function_type = 0x5;
-  static const unsigned int flag_multi_type    = 0x6;
+  static const unsigned int flag_list_type     = 0x5;
+  static const unsigned int flag_function_type = 0x6;
+  static const unsigned int flag_multi_type    = 0x7;
 
   static const unsigned int mask_type          = 0xf;
 
-  static const unsigned int flag_constant = 0x10;
-  static const unsigned int flag_static   = 0x20;
-  static const unsigned int flag_private  = 0x40;
+  static const unsigned int flag_constant      = 0x10;
+  static const unsigned int flag_static        = 0x20;
+  static const unsigned int flag_private       = 0x40;
+  static const unsigned int flag_rlookup       = 0x80;
 
   static const size_t key_size = key_type::max_size;
 
@@ -122,9 +134,13 @@ public:
   const torrent::Object& set_c_str_string(const char* str, const std::string& object) { return set_string(torrent::raw_string::from_c_str(str), object); }
   const torrent::Object& set_str_string(const std::string& str, const std::string& object) { return set_string(torrent::raw_string::from_string(str), object); }
   
+  const torrent::Object& set_list(const torrent::raw_string& key, const torrent::Object::list_type& object);
+  const torrent::Object& set_c_str_list(const char* str, const torrent::Object::list_type& object) { return set_list(torrent::raw_string::from_c_str(str), object); }
+  const torrent::Object& set_str_list(const std::string& str, const torrent::Object::list_type& object) { return set_list(torrent::raw_string::from_string(str), object); }
+
   // Functions callers:
-  torrent::Object call_function(const torrent::raw_string& key, target_type target, const torrent::Object& object);
-  torrent::Object call_function_str(const std::string& key, target_type target, const torrent::Object& object);
+  torrent::Object        call_function(const torrent::raw_string& key, target_type target, const torrent::Object& object);
+  torrent::Object        call_function_str(const std::string& key, target_type target, const torrent::Object& object);
 
   // Single-command function:
 
@@ -134,11 +150,22 @@ public:
   // Multi-command function:
   bool                   has_multi_key(const torrent::raw_string& key, const std::string& cmd_key);
   void                   erase_multi_key(const torrent::raw_string& key, const std::string& cmd_key);
-  void                   set_multi_key(const torrent::raw_string& key, const std::string& cmd_key, const std::string& object);
+  void                   set_multi_key_obj(const torrent::raw_string& key, const std::string& cmd_key, const torrent::Object& object);
+
+  void                   set_multi_key(const torrent::raw_string& key, const std::string& cmd_key, const std::string& object) { set_multi_key_obj(key, cmd_key, object); }
 
   bool                   has_str_multi_key(const std::string& key, const std::string& cmd_key);
   void                   erase_str_multi_key(const std::string& key, const std::string& cmd_key);
   void                   set_str_multi_key(const std::string& key, const std::string& cmd_key, const std::string& object);
+  void                   set_str_multi_key_obj(const std::string& key, const std::string& cmd_key, const torrent::Object& object);
+
+  torrent::Object::list_type rlookup_list(const std::string& cmd_key);
+  torrent::Object            rlookup_obj_list(const std::string& cmd_key) { return torrent::Object::from_list(rlookup_list(cmd_key)); }
+
+  void                       rlookup_clear(const std::string& cmd_key);
+
+private:
+  rlookup_type m_rlookup;
 };
 
 //
@@ -217,7 +244,12 @@ object_storage::erase_str_multi_key(const std::string& key, const std::string& c
 
 inline void
 object_storage::set_str_multi_key(const std::string& key, const std::string& cmd_key, const std::string& object) {
-  return set_multi_key(torrent::raw_string::from_string(key), cmd_key, object);
+  return set_multi_key_obj(torrent::raw_string::from_string(key), cmd_key, object);
+}
+
+inline void
+object_storage::set_str_multi_key_obj(const std::string& key, const std::string& cmd_key, const torrent::Object& object) {
+  return set_multi_key_obj(torrent::raw_string::from_string(key), cmd_key, object);
 }
 
 }

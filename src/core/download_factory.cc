@@ -41,11 +41,11 @@
 #include <sstream>
 #include <stdexcept>
 #include <rak/path.h>
+#include <torrent/utils/resume.h>
 #include <torrent/object.h>
 #include <torrent/object_stream.h>
 #include <torrent/exceptions.h>
 #include <torrent/rate.h>
-#include <torrent/resume.h>
 #include <torrent/data/file_utils.h>
 
 #include "rpc/parse_commands.h"
@@ -108,8 +108,10 @@ DownloadFactory::DownloadFactory(Manager* m) :
   m_taskLoad.set_slot(rak::mem_fn(this, &DownloadFactory::receive_load));
   m_taskCommit.set_slot(rak::mem_fn(this, &DownloadFactory::receive_commit));
 
-  m_variables["connection_leech"] = rpc::call_command_void("protocol.connection.leech");
-  m_variables["connection_seed"]  = rpc::call_command_void("protocol.connection.seed");
+  // m_variables["connection_leech"] = rpc::call_command_void("protocol.connection.leech");
+  // m_variables["connection_seed"]  = rpc::call_command_void("protocol.connection.seed");
+  m_variables["connection_leech"] = std::string();
+  m_variables["connection_seed"]  = std::string();
   m_variables["directory"]        = rpc::call_command_void("directory.default");
   m_variables["tied_to_file"]     = torrent::Object((int64_t)false);
 }
@@ -255,6 +257,7 @@ DownloadFactory::receive_success() {
   rpc::call_command("d.peers_min.set",        rpc::call_command_void("throttle.min_peers.normal"), rpc::make_target(download));
   rpc::call_command("d.peers_max.set",        rpc::call_command_void("throttle.max_peers.normal"), rpc::make_target(download));
   rpc::call_command("d.tracker_numwant.set",  rpc::call_command_void("trackers.numwant"), rpc::make_target(download));
+  rpc::call_command("d.max_file_size.set",    rpc::call_command_void("system.file.max_size"), rpc::make_target(download));
 
   if (rpc::call_command_value("d.complete", rpc::make_target(download)) != 0) {
     if (rpc::call_command_value("throttle.min_peers.seed") >= 0)
@@ -266,9 +269,6 @@ DownloadFactory::receive_success() {
 
   if (!rpc::call_command_value("trackers.use_udp"))
     download->enable_udp_trackers(false);
-
-  if (rpc::call_command_value("system.file.max_size") > 0)
-    rpc::call_command("d.max_file_size.set", rpc::call_command_void("system.file.max_size"), rpc::make_target(download));
 
   // Check first if we already have these values set in the session
   // torrent, so that it is safe to change the values.
@@ -307,7 +307,8 @@ DownloadFactory::receive_success() {
   torrent::HashString infohash = download->info()->hash();
 
   try {
-    std::for_each(m_commands.begin(), m_commands.end(), rak::bind1st(std::ptr_fun(&rpc::parse_command_d_multiple_std), download));
+    std::for_each(m_commands.begin(), m_commands.end(),
+                  rak::bind2nd(std::ptr_fun(&rpc::parse_command_multiple_std), rpc::make_target(download)));
 
     if (m_manager->download_list()->find(infohash) == m_manager->download_list()->end())
       throw torrent::input_error("The newly created download was removed.");
@@ -365,6 +366,8 @@ DownloadFactory::initialize_rtorrent(Download* download, torrent::Object* rtorre
   rtorrent->insert_preserve_copy("complete", (int64_t)0);
   rtorrent->insert_preserve_copy("hashing",  (int64_t)Download::variable_hashing_stopped);
 
+  rtorrent->insert_preserve_copy("timestamp.finished", (int64_t)0);
+
   rtorrent->insert_preserve_copy("tied_to_file", "");
   rtorrent->insert_key("loaded_file", m_isFile ? m_uri : std::string());
 
@@ -396,7 +399,12 @@ DownloadFactory::initialize_rtorrent(Download* download, torrent::Object* rtorre
   rtorrent->insert_preserve_copy("views", torrent::Object::create_list());
 
   rtorrent->insert_preserve_type("connection_leech", m_variables["connection_leech"]);
-  rtorrent->insert_preserve_type("connection_seed", m_variables["connection_seed"]);
+  rtorrent->insert_preserve_type("connection_seed",  m_variables["connection_seed"]);
+
+  rtorrent->insert_preserve_copy("choke_heuristics.up.leech",   std::string());
+  rtorrent->insert_preserve_copy("choke_heuristics.up.seed",    std::string());
+  rtorrent->insert_preserve_copy("choke_heuristics.down.leech", std::string());
+  rtorrent->insert_preserve_copy("choke_heuristics.down.seed",  std::string());
 }
 
 }
