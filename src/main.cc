@@ -177,6 +177,7 @@ main(int argc, char** argv) {
     SignalHandler::set_handler(SIGTERM,  sigc::mem_fun(control, &Control::receive_quick_shutdown));
     SignalHandler::set_handler(SIGWINCH, sigc::mem_fun(control->display(), &display::Manager::force_redraw));
     SignalHandler::set_handler(SIGSEGV,  sigc::bind(sigc::ptr_fun(&do_panic), SIGSEGV));
+    SignalHandler::set_handler(SIGILL,   sigc::bind(sigc::ptr_fun(&do_panic), SIGILL));
     SignalHandler::set_handler(SIGBUS,   sigc::bind(sigc::ptr_fun(&do_panic), SIGBUS));
     SignalHandler::set_handler(SIGFPE,   sigc::bind(sigc::ptr_fun(&do_panic), SIGFPE));
 
@@ -211,35 +212,43 @@ main(int argc, char** argv) {
 //        "method.insert = test.value2,value,6\n"
 
 //        "method.insert = test.string,string,6\n"
-//       "method.insert = test.bool,bool,true\n"
+//        "method.insert = test.bool,bool,true\n"
 
-       "method.insert = test.method.simple,simple,\"print=simple_test_,$argument.0=\"\n"
+       // "method.insert.simple = test.method.simple,((print,simple_test_,$argument.0=))\n"
+       // "method.insert.simple = test.method.double,((print,simple_test_,$argument.0=)),\"print=simple_test_,$argument.1=\"\n"
 
-       "method.insert = event.download.inserted,multi\n"
-       "method.insert = event.download.inserted_new,multi\n"
-       "method.insert = event.download.inserted_session,multi\n"
-       "method.insert = event.download.erased,multi\n"
-       "method.insert = event.download.opened,multi\n"
-       "method.insert = event.download.closed,multi\n"
-       "method.insert = event.download.resumed,multi\n"
-       "method.insert = event.download.paused,multi\n"
+       "method.insert = event.download.inserted,multi|rlookup|static\n"
+       "method.insert = event.download.inserted_new,multi|rlookup|static\n"
+       "method.insert = event.download.inserted_session,multi|rlookup|static\n"
+       "method.insert = event.download.erased,multi|rlookup|static\n"
+       "method.insert = event.download.opened,multi|rlookup|static\n"
+       "method.insert = event.download.closed,multi|rlookup|static\n"
+       "method.insert = event.download.resumed,multi|rlookup|static\n"
+       "method.insert = event.download.paused,multi|rlookup|static\n"
        
-       "method.insert = event.download.finished,multi\n"
-       "method.insert = event.download.hash_done,multi\n"
-       "method.insert = event.download.hash_failed,multi\n"
-       "method.insert = event.download.hash_final_failed,multi\n"
-       "method.insert = event.download.hash_removed,multi\n"
-       "method.insert = event.download.hash_queued,multi\n"
+       "method.insert = event.download.finished,multi|rlookup|static\n"
+       "method.insert = event.download.hash_done,multi|rlookup|static\n"
+       "method.insert = event.download.hash_failed,multi|rlookup|static\n"
+       "method.insert = event.download.hash_final_failed,multi|rlookup|static\n"
+       "method.insert = event.download.hash_removed,multi|rlookup|static\n"
+       "method.insert = event.download.hash_queued,multi|rlookup|static\n"
 
        "method.set_key = event.download.inserted,         1_connect_logs, d.initialize_logs=\n"
        "method.set_key = event.download.inserted_new,     1_prepare, \"branch=d.state=,view.set_visible=started,view.set_visible=stopped ;d.save_full_session=\"\n"
        "method.set_key = event.download.inserted_session, 1_prepare, \"branch=d.state=,view.set_visible=started,view.set_visible=stopped\"\n"
 
+       "method.set_key = event.download.inserted, 1_prioritize_toc, \"branch=file.prioritize_toc=,{\\\"f.multicall=(file.prioritize_toc.first),f.prioritize_first.enable=\\\",\\\"f.multicall=(file.prioritize_toc.last),f.prioritize_last.enable=\\\",d.update_priorities=}\"\n"
+
        "method.set_key = event.download.erased, !_download_list, ui.unfocus_download=\n"
        "method.set_key = event.download.erased, ~_delete_tied, d.delete_tied=\n"
 
-       "method.insert = group.insert_persistent_view,simple|const,"
-       "view.add=$argument.0=,view.persistent=$argument.0=,\"group.insert=$argument.0=,$argument.0=\"\n"
+       "method.set_key = event.download.finished,  !_timestamp, ((d.timestamp.finished.set, ((system.time)) ))\n"
+
+       "method.insert.c_simple = group.insert_persistent_view,"
+       "((view.add,((argument.0)))),((view.persistent,((argument.0)))),((group.insert,((argument.0)),((argument.0))))\n"
+
+       "file.prioritize_toc.first.set = {*.avi,*.mp4,*.mkv,*.gz}\n"
+       "file.prioritize_toc.last.set  = {*.zip}\n"
 
        // Allow setting 'group2.view' as constant, so that we can't
        // modify the value. And look into the possibility of making
@@ -251,62 +260,68 @@ main(int argc, char** argv) {
 
        "group.insert = seeding,seeding\n"
 
-       "session.name = \"$cat=$system.hostname=,:,$system.pid=\"\n"
+       "session.name.set = \"$cat=$system.hostname=,:,$system.pid=\"\n"
 
        // Currently not doing any sorting on main.
        "view.add = main\n"
        "view.add = default\n"
 
        "view.add = name\n"
-       "view.sort_new     = name,less=d.name=\n"
-       "view.sort_current = name,less=d.name=\n"
+       "view.sort_new     = name,((less,((d.name))))\n"
+       "view.sort_current = name,((less,((d.name))))\n"
 
        "view.add = active\n"
-       "view.filter = active,false=\n"
+       "view.filter = active,((false))\n"
 
        "view.add = started\n"
-       "view.filter = started,false=\n"
+       "view.filter = started,((false))\n"
        "view.event_added   = started,\"view.set_not_visible=stopped ;d.state.set=1 ;scheduler.simple.added=\"\n"
        "view.event_removed = started,\"view.set_visible=stopped ;scheduler.simple.removed=\"\n"
 
        "view.add = stopped\n"
-       "view.filter = stopped,false=\n"
-       "view.event_added   = stopped,\"view.set_not_visible=started ;d.state.set=0\"\n"
+       "view.filter = stopped,((false))\n"
+       "view.event_added   = stopped,\"d.state.set=0 ;view.set_not_visible=started\"\n"
        "view.event_removed = stopped,view.set_visible=started\n"
 
        "view.add = complete\n"
-       "view.filter = complete,d.complete=\n"
+       "view.filter = complete,((d.complete))\n"
        "view.filter_on    = complete,event.download.hash_done,event.download.hash_failed,event.download.hash_final_failed,event.download.finished\n"
-       "view.sort_new     = complete,less=d.state_changed=\n"
-       "view.sort_current = complete,less=d.state_changed=\n"
+       // "view.sort_new     = complete,((less,((d.state_changed))))\n"
+       // "view.sort_current = complete,((less,((d.state_changed))))\n"
 
        "view.add = incomplete\n"
-       "view.filter = incomplete,not=$d.complete=\n"
+       "view.filter = incomplete,((not,((d.complete))))\n"
        "view.filter_on    = incomplete,event.download.hash_done,event.download.hash_failed,"
-       "event.download.hash_final_failed,event.download.finished\n"
-       "view.sort_new     = incomplete,less=d.state_changed=\n"
-       "view.sort_current = incomplete,less=d.state_changed=\n"
+                                      "event.download.hash_final_failed,event.download.finished\n"
+       // "view.sort_new     = incomplete,((less,((d.state_changed))))\n"
+       // "view.sort_current = incomplete,((less,((d.state_changed))))\n"
 
        // The hashing view does not include stopped torrents.
        "view.add = hashing\n"
-       "view.filter = hashing,d.hashing=\n"
+       "view.filter = hashing,((d.hashing))\n"
        "view.filter_on = hashing,event.download.hash_queued,event.download.hash_removed,"
-       "event.download.hash_done,event.download.hash_failed,event.download.hash_final_failed\n"
+                                "event.download.hash_done,event.download.hash_failed,event.download.hash_final_failed,event.download.finished\n"
 //        "view.sort_new     = hashing,less=d.state_changed=\n"
 //        "view.sort_current = hashing,less=d.state_changed=\n"
 
-       "view.add = seeding\n"
-       "view.filter = seeding,\"and=d.state=,d.complete=\"\n"
+       "view.add    = seeding\n"
+       "view.filter = seeding,((and,((d.state)),((d.complete))))\n"
        "view.filter_on    = seeding,event.download.resumed,event.download.paused,event.download.finished\n"
-       "view.sort_new     = seeding,less=d.state_changed=\n"
-       "view.sort_current = seeding,less=d.state_changed=\n"
+       // "view.sort_new     = seeding,((less,((d.state_changed))))\n"
+       // "view.sort_current = seeding,((less,((d.state_changed))))\n"
 
-       "schedule2 = view.main,10,10,\"view.sort=main,20\"\n"
-       "schedule2 = view.name,10,10,\"view.sort=name,20\"\n"
+       "view.add    = leeching\n"
+       "view.filter = leeching,((and,((d.state)),((not,((d.complete))))))\n"
+       "view.filter_on    = leeching,event.download.resumed,event.download.paused,event.download.finished\n"
+       // "view.sort_new     = leeching,((less,((d.state_changed))))\n"
+       // "view.sort_current = leeching,((less,((d.state_changed))))\n"
 
-       "schedule2 = session_save,1200,1200,session.save=\n"
-       "schedule2 = low_diskspace,5,60,close_low_diskspace=500M\n"
-       "schedule2 = prune_file_status,3600,86400,system.file_status_cache.prune=\n"
+       "schedule2 = view.main,10,10,((view.sort,main,20))\n"
+       "schedule2 = view.name,10,10,((view.sort,name,20))\n"
+
+       "schedule2 = session_save,1200,1200,((session.save))\n"
+       "schedule2 = low_diskspace,5,60,((close_low_diskspace,500M))\n"
+       "schedule2 = prune_file_status,3600,86400,((system.file_status_cache.prune))\n"
 
        "protocol.encryption.set=allow_incoming,prefer_plaintext,enable_retry\n"
     );
@@ -377,6 +392,7 @@ main(int argc, char** argv) {
       CMD2_REDIRECT_GENERIC_NO_EXPORT("schedule_remove", "schedule_remove2");
     }
 
+#if LT_SLIM_VERSION != 1
     if (rpc::call_command_value("method.use_deprecated")) {
       // Deprecated in 0.7.0:
 
@@ -804,6 +820,7 @@ main(int argc, char** argv) {
       CMD2_REDIRECT_GENERIC("execute_capture", "execute.capture");
       CMD2_REDIRECT_GENERIC("execute_capture_nothrow", "execute.capture_nothrow");
     }
+#endif
 
     int firstArg = parse_options(control, argc, argv);
 

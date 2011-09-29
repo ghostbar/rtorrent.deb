@@ -131,17 +131,25 @@ ExecFile::execute(const char* file, char* const* argv, int flags) {
       }
     }
 
-    int status;
-    int wpid = waitpid(childPid, &status, 0);
+    if (flags & flag_background) {
+      if (m_logFd != -1)
+        write(m_logFd, "\n--- Background task ---\n", sizeof("\n--- Background task ---\n"));
+        
+      return 0;
+    }
 
-    while (wpid == -1 && rak::error_number::current().value() == rak::error_number::e_intr)
+    int status;
+    int wpid;
+
+    do {
       wpid = waitpid(childPid, &status, 0);
+    } while (wpid == -1 && rak::error_number::current().value() == rak::error_number::e_intr);
 
     if (wpid != childPid)
       throw torrent::internal_error("ExecFile::execute(...) waitpid failed.");
 
     // Check return value?
-    if (m_logFd) {
+    if (m_logFd != -1) {
       if (status == 0)
         write(m_logFd, "\n--- Success ---\n", sizeof("\n--- Success ---\n"));
       else
@@ -161,25 +169,39 @@ ExecFile::execute_object(const torrent::Object& rawArgs, int flags) {
   char   valueBuffer[buffer_size];
   char*  valueCurrent = valueBuffer;
 
-  const torrent::Object::list_type& args = rawArgs.as_list();
+  if (rawArgs.is_list()) {
+    const torrent::Object::list_type& args = rawArgs.as_list();
 
-  if (args.empty())
-    throw torrent::input_error("Too few arguments.");
+    if (args.empty())
+      throw torrent::input_error("Too few arguments.");
 
-  for (torrent::Object::list_const_iterator itr = args.begin(), last = args.end(); itr != last; itr++, argsCurrent++) {
-    if (argsCurrent == argsBuffer + max_args - 1)
-      throw torrent::input_error("Too many arguments.");
+    for (torrent::Object::list_const_iterator itr = args.begin(), last = args.end(); itr != last; itr++, argsCurrent++) {
+      if (argsCurrent == argsBuffer + max_args - 1)
+        throw torrent::input_error("Too many arguments.");
 
-    if (itr->is_string() && (!(flags & flag_expand_tilde) || *itr->as_string().c_str() != '~')) {
-      *argsCurrent = const_cast<char*>(itr->as_string().c_str());
+      if (itr->is_string() && (!(flags & flag_expand_tilde) || *itr->as_string().c_str() != '~')) {
+        *argsCurrent = const_cast<char*>(itr->as_string().c_str());
 
-    } else {
+      } else {
+        *argsCurrent = valueCurrent;
+        valueCurrent = print_object(valueCurrent, valueBuffer + buffer_size, &*itr, flags) + 1;
+
+        if (valueCurrent >= valueBuffer + buffer_size)
+          throw torrent::input_error("Overflowed execute arg buffer.");
+      }      
+    }
+
+  } else {
+    const torrent::Object::string_type& args = rawArgs.as_string();
+    
+    if ((flags & flag_expand_tilde) && args.c_str()[0] == '~') {
       *argsCurrent = valueCurrent;
-      valueCurrent = print_object(valueCurrent, valueBuffer + buffer_size, &*itr, flags) + 1;
+      valueCurrent = print_object(valueCurrent, valueBuffer + buffer_size, &rawArgs, flags) + 1;
+    } else {
+      *argsCurrent = const_cast<char*>(args.c_str());
+    }
 
-      if (valueCurrent >= valueBuffer + buffer_size)
-        throw torrent::input_error("Overflowed execute arg buffer.");
-    }      
+    argsCurrent++;
   }
 
   *argsCurrent = NULL;
