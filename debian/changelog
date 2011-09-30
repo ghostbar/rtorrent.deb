@@ -1,14 +1,15 @@
-rtorrent (0.8.9-1) UNRELEASED; urgency=low
+rtorrent (0.8.9-1) unstable; urgency=low
 
   * Imported Upstream version 0.8.9. Closes: #632314.
   * debian/README.source: Document the preparation of the package.
-  * debian/control: Update build-dependency version on libtorrent.
+  * debian/control:
+    + Update build-dependency version on libtorrent.
   * debian/patches:
     + Refresh patches.
     + Drop r1185.patch, already applied upstream.
     + Disable the IPv6 patch.
 
- -- Rogério Brito <rbrito@ime.usp.br>  Thu, 29 Sep 2011 21:19:18 -0300
+ -- Rogério Brito <rbrito@ime.usp.br>  Thu, 29 Sep 2011 21:55:44 -0300
 
 rtorrent (0.8.7-7) unstable; urgency=low
 
