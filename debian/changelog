@@ -1,3 +1,13 @@
+rtorrent (0.8.9-2) unstable; urgency=medium
+
+  * Urgency set to medium due to an RC bugfix. Closes: #645737.
+  * debian/control:
+    + Build-depend on the version of libtorrent that has IPv6.
+  * debian/patches/series:
+    + Reenable the IPv6 patch.
+
+ -- Rogério Brito <rbrito@ime.usp.br>  Thu, 20 Oct 2011 22:45:57 -0200
+
 rtorrent (0.8.9-1) unstable; urgency=low
 
   * Imported Upstream version 0.8.9. Closes: #632314.
