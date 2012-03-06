@@ -1,5 +1,5 @@
 // rTorrent - BitTorrent client
-// Copyright (C) 2005-2007, Jari Sundell
+// Copyright (C) 2005-2011, Jari Sundell
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -44,6 +44,7 @@
 #include <sigc++/adaptors/bind.h>
 #include <torrent/rate.h>
 #include <torrent/hash_string.h>
+#include <torrent/utils/log.h>
 
 #include "core/download.h"
 #include "core/download_list.h"
@@ -235,7 +236,7 @@ apply_close_low_diskspace(int64_t arg) {
   }
 
   if (closed)
-    control->core()->push_log("Closed torrents due to low diskspace.");    
+    lt_log_print(torrent::LOG_TORRENT_ERROR, "Closed torrents due to low diskspace.");    
 
   return torrent::Object();
 }
@@ -285,10 +286,15 @@ d_multicall(const torrent::Object::list_type& args) {
 
   // Add some pre-parsing of the commands, so we don't spend time
   // parsing and searching command map for every single call.
+  unsigned int dlist_size = (*viewItr)->size_visible();
+  core::Download* dlist[dlist_size];
+
+  std::copy((*viewItr)->begin_visible(), (*viewItr)->end_visible(), dlist);
+
   torrent::Object             resultRaw = torrent::Object::create_list();
   torrent::Object::list_type& result = resultRaw.as_list();
 
-  for (core::View::const_iterator vItr = (*viewItr)->begin_visible(), vLast = (*viewItr)->end_visible(); vItr != vLast; vItr++) {
+  for (core::Download** vItr = dlist; vItr != dlist + dlist_size; vItr++) {
     torrent::Object::list_type& row = result.insert(result.end(), torrent::Object::create_list())->as_list();
 
     for (torrent::Object::list_const_iterator cItr = ++args.begin(), cLast = args.end(); cItr != args.end(); cItr++) {

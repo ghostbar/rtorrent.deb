@@ -1,5 +1,5 @@
 // rTorrent - BitTorrent client
-// Copyright (C) 2005-2007, Jari Sundell
+// Copyright (C) 2005-2011, Jari Sundell
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -251,7 +251,10 @@ ElementFileList::receive_select() {
     return;
 
   if (is_collapsed() && !m_selected.is_file()) {
+    torrent::FileList* fl = m_download->download()->file_list();
     m_selected++;
+    if (m_selected == iterator(fl->end()))
+      m_selected = iterator(fl->begin());
     m_window->mark_dirty();
   } else {
     activate_display(DISPLAY_INFO);

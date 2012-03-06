@@ -1,5 +1,5 @@
 // rTorrent - BitTorrent client
-// Copyright (C) 2005-2007, Jari Sundell
+// Copyright (C) 2005-2011, Jari Sundell
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -48,17 +48,22 @@
 #include <torrent/rate.h>
 #include <torrent/throttle.h>
 #include <torrent/tracker.h>
+#include <torrent/tracker_controller.h>
+#include <torrent/tracker_list.h>
 #include <torrent/connection_manager.h>
+#include <torrent/data/download_data.h>
 #include <torrent/data/file.h>
 #include <torrent/data/file_list.h>
 #include <torrent/download/resource_manager.h>
 #include <torrent/peer/connection_list.h>
 #include <torrent/peer/peer_list.h>
+#include <torrent/utils/log.h>
 #include <torrent/utils/option_strings.h>
 
 #include "core/download.h"
 #include "core/download_store.h"
 #include "core/manager.h"
+#include "rpc/parse.h"
 
 #include "globals.h"
 #include "control.h"
@@ -284,9 +289,6 @@ cmd_d_initialize_logs(core::Download* download) {
   download->info()->signal_network_log().connect(sigc::mem_fun(control->core(), &core::Manager::push_log_complete));
   download->info()->signal_storage_error().connect(sigc::mem_fun(control->core(), &core::Manager::push_log_complete));
 
-  if (!rpc::call_command_string("log.tracker").empty())
-    download->info()->signal_tracker_dump().connect(sigc::ptr_fun(&core::receive_tracker_dump));
-
   return torrent::Object();
 }
 
@@ -294,10 +296,11 @@ struct call_add_d_peer_t {
   call_add_d_peer_t(core::Download* d, int port) : m_download(d), m_port(port) { }
 
   void operator() (const sockaddr* sa, int err) {
-    if (sa == NULL)
-      control->core()->push_log("Could not resolve host.");
-    else
+    if (sa == NULL) {
+      lt_log_print(torrent::LOG_CONNECTION_WARN, "Could not resolve hostname for added peer.");
+    } else {
       m_download->download()->add_peer(sa, m_port);
+    }
   }
 
   core::Download* m_download;
@@ -458,6 +461,25 @@ p_call_target(const torrent::Object::list_type& args) {
   return rpc::commands.call(command_key.c_str(), torrent::Object::create_list_range(itr, args.end()));
 }
 
+torrent::Object
+download_tracker_insert(core::Download* download, const torrent::Object::list_type& args) {
+  if (args.size() != 2)
+    throw torrent::input_error("Wrong argument count.");
+
+  int64_t group;
+
+  if (args.front().is_string())
+    rpc::parse_whole_value_nothrow(args.front().as_string().c_str(), &group);
+  else
+    group = args.front().as_value();
+
+  if (group < 0 || group > 32)
+    throw torrent::input_error("Tracker group number invalid.");
+
+  download->download()->tracker_list()->insert_url(group, args.back().as_string(), true);
+  return torrent::Object();
+}
+
 //
 // New download commands and macros:
 //
@@ -485,6 +507,19 @@ download_set_variable_value(core::Download* download, const torrent::Object::val
     return download->bencode()->get_key(first_key) = args;
 
   return download->bencode()->get_key(first_key).get_key(second_key) = args;
+}
+
+torrent::Object
+download_set_variable_value_ifz(core::Download* download, const torrent::Object::value_type& args,
+                                const char* first_key, const char* second_key = NULL) {
+  torrent::Object& object = second_key == NULL ?
+    download->bencode()->get_key(first_key) :
+    download->bencode()->get_key(first_key).get_key(second_key);
+
+  if (object.as_value() == 0)
+    object = args;
+
+  return object;
 }
 
 torrent::Object
@@ -538,9 +573,8 @@ d_list_remove(core::Download* download, const torrent::Object& rawArgs, const ch
   return torrent::Object();
 }
 
-#define CMD_ON_INFO(func) rak::on(std::mem_fun(&core::Download::info), std::mem_fun(&torrent::DownloadInfo::func))
-
 #define CMD2_ON_INFO(func) std::bind(&torrent::DownloadInfo::func, std::bind(&core::Download::info, std::placeholders::_1))
+#define CMD2_ON_DATA(func) std::bind(&torrent::download_data::func, std::bind(&core::Download::data, std::placeholders::_1))
 #define CMD2_ON_DL(func) std::bind(&torrent::Download::func, std::bind(&core::Download::download, std::placeholders::_1))
 #define CMD2_ON_FL(func) std::bind(&torrent::FileList::func, std::bind(&core::Download::file_list, std::placeholders::_1))
 
@@ -549,6 +583,10 @@ d_list_remove(core::Download* download, const torrent::Object& rawArgs, const ch
 #define CMD2_BIND_FL std::bind(&core::Download::file_list, std::placeholders::_1)
 #define CMD2_BIND_PL std::bind(&core::Download::c_peer_list, std::placeholders::_1)
 #define CMD2_BIND_TL std::bind(&core::Download::tracker_list, std::placeholders::_1)
+#define CMD2_BIND_TC std::bind(&core::Download::tracker_controller, std::placeholders::_1)
+
+#define CMD2_BIND_INFO std::bind(&core::Download::info, std::placeholders::_1)
+#define CMD2_BIND_DATA std::bind(&core::Download::data, std::placeholders::_1)
 
 #define CMD2_DL_VAR_VALUE(key, first_key, second_key)                   \
   CMD2_DL(key, std::bind(&download_get_variable, std::placeholders::_1, first_key, second_key)); \
@@ -562,6 +600,15 @@ d_list_remove(core::Download* download, const torrent::Object& rawArgs, const ch
                                            std::placeholders::_1, std::placeholders::_2, \
                                            first_key, second_key));
 
+#define CMD2_DL_TIMESTAMP(key, first_key, second_key)                   \
+  CMD2_DL(key, std::bind(&download_get_variable, std::placeholders::_1, first_key, second_key)); \
+  CMD2_DL_VALUE_P(key ".set", std::bind(&download_set_variable_value, \
+                                             std::placeholders::_1, std::placeholders::_2, \
+                                             first_key, second_key)); \
+  CMD2_DL_VALUE_P(key ".set_if_z", std::bind(&download_set_variable_value_ifz, \
+                                             std::placeholders::_1, std::placeholders::_2, \
+                                             first_key, second_key));   \
+
 #define CMD2_DL_VAR_STRING(key, first_key, second_key)                   \
   CMD2_DL(key, std::bind(&download_get_variable, std::placeholders::_1, first_key, second_key)); \
   CMD2_DL_STRING_P(key ".set", std::bind(&download_set_variable_string, \
@@ -573,6 +620,10 @@ d_list_remove(core::Download* download, const torrent::Object& rawArgs, const ch
   CMD2_DL_STRING(key ".set", std::bind(&download_set_variable_string, \
                                             std::placeholders::_1, std::placeholders::_2, \
                                             first_key, second_key));
+
+int64_t            cg_d_group(core::Download* download);
+const std::string& cg_d_group_name(core::Download* download);
+void               cg_d_group_set(core::Download* download, const torrent::Object& arg);
 
 void
 initialize_command_download() {
@@ -615,13 +666,15 @@ initialize_command_download() {
   // Control functinos:
   //
 
-  CMD2_DL         ("d.is_open",          CMD2_ON_INFO(is_open));
-  CMD2_DL         ("d.is_active",        CMD2_ON_INFO(is_active));
-  CMD2_DL         ("d.is_hash_checked",  std::bind(&torrent::Download::is_hash_checked, CMD2_BIND_DL));
-  CMD2_DL         ("d.is_hash_checking", std::bind(&torrent::Download::is_hash_checking, CMD2_BIND_DL));
-  CMD2_DL         ("d.is_multi_file",    std::bind(&torrent::FileList::is_multi_file, CMD2_BIND_FL));
-  CMD2_DL         ("d.is_private",       CMD2_ON_INFO(is_private));
-  CMD2_DL         ("d.is_pex_active",    CMD2_ON_INFO(is_pex_active));
+  CMD2_DL         ("d.is_open",               CMD2_ON_INFO(is_open));
+  CMD2_DL         ("d.is_active",             CMD2_ON_INFO(is_active));
+  CMD2_DL         ("d.is_hash_checked",       std::bind(&torrent::Download::is_hash_checked, CMD2_BIND_DL));
+  CMD2_DL         ("d.is_hash_checking",      std::bind(&torrent::Download::is_hash_checking, CMD2_BIND_DL));
+  CMD2_DL         ("d.is_multi_file",         std::bind(&torrent::FileList::is_multi_file, CMD2_BIND_FL));
+  CMD2_DL         ("d.is_private",            CMD2_ON_INFO(is_private));
+  CMD2_DL         ("d.is_pex_active",         CMD2_ON_INFO(is_pex_active));
+  CMD2_DL         ("d.is_partially_done",     CMD2_ON_DATA(is_partially_done));
+  CMD2_DL         ("d.is_not_partially_done", CMD2_ON_DATA(is_not_partially_done));
 
   CMD2_DL_V       ("d.resume",     std::bind(&core::DownloadList::resume_default, control->core()->download_list(), std::placeholders::_1));
   CMD2_DL_V       ("d.pause",      std::bind(&core::DownloadList::pause_default, control->core()->download_list(), std::placeholders::_1));
@@ -686,7 +739,8 @@ initialize_command_download() {
   CMD2_DL_VAR_VALUE("d.state_counter",          "rtorrent", "state_counter");
   CMD2_DL_VAR_VALUE_PUBLIC("d.ignore_commands", "rtorrent", "ignore_commands");
 
-  CMD2_DL_VAR_VALUE("d.timestamp.finished",     "rtorrent", "timestamp.finished");
+  CMD2_DL_TIMESTAMP("d.timestamp.started",      "rtorrent", "timestamp.started");
+  CMD2_DL_TIMESTAMP("d.timestamp.finished",     "rtorrent", "timestamp.finished");
 
   CMD2_DL       ("d.connection_current",     std::bind(&torrent::option_as_string, torrent::OPTION_CONNECTION_TYPE, CMD2_ON_DL(connection_type)));
   CMD2_DL_STRING("d.connection_current.set", std::bind(&apply_d_connection_type, std::placeholders::_1, std::placeholders::_2));
@@ -727,11 +781,23 @@ initialize_command_download() {
   CMD2_DL_VALUE_V ("d.peers_max.set",       std::bind(&torrent::ConnectionList::set_max_size, CMD2_BIND_CL, std::placeholders::_2));
   CMD2_DL         ("d.uploads_max",         std::bind(&torrent::Download::uploads_max, CMD2_BIND_DL));
   CMD2_DL_VALUE_V ("d.uploads_max.set",     std::bind(&torrent::Download::set_uploads_max, CMD2_BIND_DL, std::placeholders::_2));
+  CMD2_DL         ("d.uploads_min",         std::bind(&torrent::Download::uploads_min, CMD2_BIND_DL));
+  CMD2_DL_VALUE_V ("d.uploads_min.set",     std::bind(&torrent::Download::set_uploads_min, CMD2_BIND_DL, std::placeholders::_2));
+  CMD2_DL         ("d.downloads_max",         std::bind(&torrent::Download::downloads_max, CMD2_BIND_DL));
+  CMD2_DL_VALUE_V ("d.downloads_max.set",     std::bind(&torrent::Download::set_downloads_max, CMD2_BIND_DL, std::placeholders::_2));
+  CMD2_DL         ("d.downloads_min",         std::bind(&torrent::Download::downloads_min, CMD2_BIND_DL));
+  CMD2_DL_VALUE_V ("d.downloads_min.set",     std::bind(&torrent::Download::set_downloads_min, CMD2_BIND_DL, std::placeholders::_2));
   CMD2_DL         ("d.peers_connected",     std::bind(&torrent::ConnectionList::size, CMD2_BIND_CL));
   CMD2_DL         ("d.peers_not_connected", std::bind(&torrent::PeerList::available_list_size, CMD2_BIND_PL));
 
   CMD2_DL         ("d.peers_complete",      CMD2_ON_DL(peers_complete));
   CMD2_DL         ("d.peers_accounted",     CMD2_ON_DL(peers_accounted));
+
+  CMD2_DL_V       ("d.disconnect.seeders",        std::bind(&torrent::ConnectionList::erase_seeders, CMD2_BIND_CL));
+
+  CMD2_DL         ("d.accepting_seeders",         CMD2_ON_INFO(is_accepting_seeders));
+  CMD2_DL_V       ("d.accepting_seeders.enable",  std::bind(&torrent::DownloadInfo::public_set_flags,   CMD2_BIND_INFO, torrent::DownloadInfo::flag_accepting_seeders));
+  CMD2_DL_V       ("d.accepting_seeders.disable", std::bind(&torrent::DownloadInfo::public_unset_flags, CMD2_BIND_INFO, torrent::DownloadInfo::flag_accepting_seeders));
 
   CMD2_DL         ("d.throttle_name",     std::bind(&download_get_variable, std::placeholders::_1, "rtorrent", "throttle_name"));
   CMD2_DL_STRING_V("d.throttle_name.set", std::bind(&core::Download::set_throttle_name, std::placeholders::_1, std::placeholders::_2));
@@ -752,11 +818,17 @@ initialize_command_download() {
   CMD2_DL         ("d.completed_chunks", CMD2_ON_FL(completed_chunks));
   CMD2_DL         ("d.left_bytes",       CMD2_ON_FL(left_bytes));
 
-  CMD2_DL_V       ("d.tracker_announce",     std::bind(&torrent::TrackerList::manual_request, CMD2_BIND_TL, false)); 
+  CMD2_DL         ("d.wanted_chunks",    CMD2_ON_DATA(wanted_chunks));
+
+  CMD2_DL_V       ("d.tracker_announce",     std::bind(&torrent::Download::manual_request, CMD2_BIND_DL, false)); 
   CMD2_DL         ("d.tracker_numwant",      std::bind(&torrent::TrackerList::numwant, CMD2_BIND_TL));
   CMD2_DL_VALUE_V ("d.tracker_numwant.set",  std::bind(&torrent::TrackerList::set_numwant, CMD2_BIND_TL, std::placeholders::_2));
-  CMD2_DL         ("d.tracker_focus",        std::bind(&torrent::TrackerList::focus_index, CMD2_BIND_TL));
+  // TODO: Deprecate 'd.tracker_focus'.
+  CMD2_DL         ("d.tracker_focus",        std::bind(&core::Download::tracker_list_size, std::placeholders::_1));
   CMD2_DL         ("d.tracker_size",         std::bind(&core::Download::tracker_list_size, std::placeholders::_1));
+
+  CMD2_DL_LIST    ("d.tracker.insert",       std::bind(&download_tracker_insert, std::placeholders::_1, std::placeholders::_2));
+  CMD2_DL_VALUE_V ("d.tracker.send_scrape",  std::bind(&torrent::TrackerController::scrape_request, CMD2_BIND_TC, std::placeholders::_2));
 
   CMD2_DL         ("d.directory",          CMD2_ON_FL(root_dir));
   CMD2_DL_STRING_V("d.directory.set",      std::bind(&apply_d_directory, std::placeholders::_1, std::placeholders::_2));
@@ -767,14 +839,19 @@ initialize_command_download() {
   CMD2_DL         ("d.priority_str", std::bind(&retrieve_d_priority_str, std::placeholders::_1));
   CMD2_DL_VALUE_V ("d.priority.set", std::bind(&core::Download::set_priority, std::placeholders::_1, std::placeholders::_2));
 
-  CMD2_DL         ("d.group",     std::bind(&torrent::resource_manager_entry::group,
-                                            std::bind(&torrent::ResourceManager::entry_at, torrent::resource_manager(),
-                                                      std::bind(&core::Download::main, std::placeholders::_1))));
-  CMD2_DL_VALUE_V ("d.group.set", std::bind(&torrent::ResourceManager::set_group,
-                                            torrent::resource_manager(),
-                                            std::bind(&torrent::ResourceManager::find_throw, torrent::resource_manager(),
-                                                      std::bind(&core::Download::main, std::placeholders::_1)),
-                                            std::placeholders::_2));
+  // CMD2_DL         ("d.group",     std::bind(&torrent::resource_manager_entry::group,
+  //                                           std::bind(&torrent::ResourceManager::entry_at, torrent::resource_manager(),
+  //                                                     std::bind(&core::Download::main, std::placeholders::_1))));
+
+  // CMD2_DL_V       ("d.group.set", std::bind(&torrent::ResourceManager::set_group,
+  //                                           torrent::resource_manager(),
+  //                                           std::bind(&torrent::ResourceManager::find_throw, torrent::resource_manager(),
+  //                                                     std::bind(&core::Download::main, std::placeholders::_1)),
+  //                                           CG_GROUP_INDEX()));
+
+  CMD2_DL         ("d.group",      std::bind(&cg_d_group, std::placeholders::_1));;
+  CMD2_DL         ("d.group.name", std::bind(&cg_d_group, std::placeholders::_1));;
+  CMD2_DL_V       ("d.group.set",  std::bind(&cg_d_group_set, std::placeholders::_1, std::placeholders::_2));
 
   CMD2_DL         ("d.initialize_logs", std::bind(&cmd_d_initialize_logs, std::placeholders::_1));
 

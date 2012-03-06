@@ -1,5 +1,5 @@
 // rTorrent - BitTorrent client
-// Copyright (C) 2005-2007, Jari Sundell
+// Copyright (C) 2005-2011, Jari Sundell
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -156,8 +156,8 @@ DownloadFactory::receive_load() {
     m_stream = new std::stringstream;
     HttpQueue::iterator itr = m_manager->http_queue()->insert(m_uri, m_stream);
 
-    (*itr)->signal_done().slots().push_front(sigc::mem_fun(*this, &DownloadFactory::receive_loaded));
-    (*itr)->signal_failed().slots().push_front(sigc::mem_fun(*this, &DownloadFactory::receive_failed));
+    (*itr)->signal_done().push_front(std::bind(&DownloadFactory::receive_loaded, this));
+    (*itr)->signal_failed().push_front(std::bind(&DownloadFactory::receive_failed, this, std::placeholders::_1));
 
     m_variables["tied_to_file"] = (int64_t)false;
 
@@ -253,7 +253,10 @@ DownloadFactory::receive_success() {
   if (!rtorrent->has_key_string("custom4")) rtorrent->insert_key("custom4", std::string());
   if (!rtorrent->has_key_string("custom5")) rtorrent->insert_key("custom5", std::string());
 
+  rpc::call_command("d.uploads_min.set",      rpc::call_command_void("throttle.min_uploads"), rpc::make_target(download));
   rpc::call_command("d.uploads_max.set",      rpc::call_command_void("throttle.max_uploads"), rpc::make_target(download));
+  rpc::call_command("d.downloads_min.set",    rpc::call_command_void("throttle.min_downloads"), rpc::make_target(download));
+  rpc::call_command("d.downloads_max.set",    rpc::call_command_void("throttle.max_downloads"), rpc::make_target(download));
   rpc::call_command("d.peers_min.set",        rpc::call_command_void("throttle.min_peers.normal"), rpc::make_target(download));
   rpc::call_command("d.peers_max.set",        rpc::call_command_void("throttle.max_peers.normal"), rpc::make_target(download));
   rpc::call_command("d.tracker_numwant.set",  rpc::call_command_void("trackers.numwant"), rpc::make_target(download));
@@ -366,6 +369,7 @@ DownloadFactory::initialize_rtorrent(Download* download, torrent::Object* rtorre
   rtorrent->insert_preserve_copy("complete", (int64_t)0);
   rtorrent->insert_preserve_copy("hashing",  (int64_t)Download::variable_hashing_stopped);
 
+  rtorrent->insert_preserve_copy("timestamp.started",  (int64_t)0);
   rtorrent->insert_preserve_copy("timestamp.finished", (int64_t)0);
 
   rtorrent->insert_preserve_copy("tied_to_file", "");
@@ -387,9 +391,8 @@ DownloadFactory::initialize_rtorrent(Download* download, torrent::Object* rtorre
   if (rtorrent->has_key_value("total_uploaded"))
     download->info()->mutable_up_rate()->set_total(rtorrent->get_key_value("total_uploaded"));
 
-  if (rtorrent->has_key_value("chunks_done"))
-    download->download()->set_chunks_done(std::min<uint32_t>(rtorrent->get_key_value("chunks_done"),
-                                                             download->download()->file_list()->size_chunks()));
+  if (rtorrent->has_key_value("chunks_done") && rtorrent->has_key_value("chunks_wanted"))
+    download->download()->set_chunks_done(rtorrent->get_key_value("chunks_done"), rtorrent->get_key_value("chunks_wanted"));
 
   download->set_throttle_name(rtorrent->has_key_string("throttle_name")
                               ? rtorrent->get_key_string("throttle_name")
