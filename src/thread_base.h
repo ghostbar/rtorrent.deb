@@ -1,5 +1,5 @@
 // libTorrent - BitTorrent library
-// Copyright (C) 2005-2007, Jari Sundell
+// Copyright (C) 2005-2011, Jari Sundell
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -84,6 +84,11 @@ public:
 
   static void*        event_loop(ThreadBase* threadBase);
 
+  // Only call this when global lock has been acquired, as it checks
+  // ThreadBase::is_main_polling() which is only guaranteed to remain
+  // 'false' if global lock keeps main thread from entering polling
+  // again.
+  //
   // Move to libtorrent some day.
   static void         interrupt_main_polling();
 
@@ -91,6 +96,8 @@ protected:
   inline rak::timer   client_next_timeout();
 
   void                call_queued_items();
+
+  // TODO: Add thread name.
 
   pthread_t           m_thread;
   state_type          m_state;

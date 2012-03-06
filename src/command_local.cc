@@ -1,5 +1,5 @@
 // rTorrent - BitTorrent client
-// Copyright (C) 2005-2007, Jari Sundell
+// Copyright (C) 2005-2011, Jari Sundell
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -48,7 +48,9 @@
 #include <torrent/chunk_manager.h>
 #include <torrent/data/file_manager.h>
 #include <torrent/data/chunk_utils.h>
+#include <torrent/utils/log.h>
 #include <torrent/utils/log_files.h>
+#include <torrent/utils/option_strings.h>
 
 #include "core/download.h"
 #include "core/download_list.h"
@@ -93,7 +95,7 @@ apply_log(const torrent::Object::string_type& arg, int logType) {
     }
   }
 
-  if (arg.empty()) {
+  if (!arg.empty()) {
     int logFd = open(rak::path_expand(arg).c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644);
 
     if (logFd < 0)
@@ -246,7 +248,7 @@ log_vmmap_dump(const std::string& str) {
   FILE* log_file = fopen(str.c_str(), "w");
 
   for (std::vector<torrent::vm_mapping>::iterator itr = all_mappings.begin(), last = all_mappings.end(); itr != last; itr++) {
-    fprintf(log_file, "%8p-%8p [%5llxk]\n", itr->ptr, (char*)itr->ptr + itr->length, itr->length / 1024);
+    fprintf(log_file, "%8p-%8p [%5llxk]\n", itr->ptr, (char*)itr->ptr + itr->length, (long long unsigned int)(itr->length / 1024));
   }
 
   fclose(log_file);
@@ -294,6 +296,25 @@ cmd_file_append(const torrent::Object::list_type& args) {
 
   fprintf(output, "\n");
   fclose(output);
+  return torrent::Object();
+}
+
+torrent::Object
+apply_log_open_file(const torrent::Object::list_type& args) {
+  if (args.size() != 2)
+    throw torrent::input_error("Invalid number of arguments.");
+  
+  torrent::log_open_file_output(args.front().as_string().c_str(), args.back().as_string().c_str());
+  return torrent::Object();
+}
+
+torrent::Object
+apply_log_add_output(const torrent::Object::list_type& args) {
+  if (args.size() != 2)
+    throw torrent::input_error("Invalid number of arguments.");
+  
+  torrent::log_add_group_output(torrent::option_find_string(torrent::OPTION_LOG_GROUP, args.front().as_string().c_str()),
+                                args.back().as_string().c_str());
   return torrent::Object();
 }
 
@@ -389,6 +410,9 @@ initialize_command_local() {
   CMD2_EXECUTE     ("execute.raw_nothrow.bg",  rpc::ExecFile::flag_background);
   CMD2_EXECUTE     ("execute.capture",         rpc::ExecFile::flag_throw | rpc::ExecFile::flag_expand_tilde | rpc::ExecFile::flag_capture);
   CMD2_EXECUTE     ("execute.capture_nothrow", rpc::ExecFile::flag_expand_tilde | rpc::ExecFile::flag_capture);
+
+  CMD2_ANY_LIST    ("log.open_file",  std::bind(&apply_log_open_file, std::placeholders::_2));
+  CMD2_ANY_LIST    ("log.add_output", std::bind(&apply_log_add_output, std::placeholders::_2));
 
   CMD2_ANY_STRING  ("log.execute",    std::bind(&apply_log, std::placeholders::_2, 0));
   CMD2_ANY_STRING  ("log.vmmap.dump", std::bind(&log_vmmap_dump, std::placeholders::_2));

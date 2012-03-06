@@ -1,5 +1,5 @@
 // rTorrent - BitTorrent client
-// Copyright (C) 2005-2007, Jari Sundell
+// Copyright (C) 2005-2011, Jari Sundell
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -36,14 +36,20 @@
 
 #include "config.h"
 
+#define __STDC_FORMAT_MACROS
+
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <inttypes.h>
 #include <sigc++/adaptors/bind.h>
 #include <torrent/http.h>
 #include <torrent/torrent.h>
 #include <torrent/exceptions.h>
+#include <torrent/data/chunk_utils.h>
+#include <torrent/utils/log.h>
 #include <rak/functional.h>
+#include <rak/error_number.h>
 
 #ifdef USE_EXECINFO
 #include <execinfo.h>
@@ -73,6 +79,9 @@
 #include "thread_main.h"
 #include "thread_worker.h"
 
+namespace std { using namespace tr1; }
+
+void handle_sigbus(int signum, siginfo_t* sa, void* ptr);
 void do_panic(int signum);
 void print_help();
 void initialize_commands();
@@ -178,8 +187,9 @@ main(int argc, char** argv) {
     SignalHandler::set_handler(SIGWINCH, sigc::mem_fun(control->display(), &display::Manager::force_redraw));
     SignalHandler::set_handler(SIGSEGV,  sigc::bind(sigc::ptr_fun(&do_panic), SIGSEGV));
     SignalHandler::set_handler(SIGILL,   sigc::bind(sigc::ptr_fun(&do_panic), SIGILL));
-    SignalHandler::set_handler(SIGBUS,   sigc::bind(sigc::ptr_fun(&do_panic), SIGBUS));
     SignalHandler::set_handler(SIGFPE,   sigc::bind(sigc::ptr_fun(&do_panic), SIGFPE));
+
+    SignalHandler::set_sigaction_handler(SIGBUS, &handle_sigbus);
 
     // SIGUSR1 is used for interrupting polling, forcing that thread
     // to process new non-socket events.
@@ -191,19 +201,26 @@ main(int argc, char** argv) {
     // torrent::ConnectionManager* are valid etc.
     initialize_commands();
 
+    // Initialize logging:
+    torrent::log_initialize();
+    torrent::log_open_output("console", std::bind(&core::Manager::push_log, control->core(), std::placeholders::_1));
+    torrent::log_add_group_output(torrent::LOG_INFO, "console");
+
+    lt_log_print(torrent::LOG_INFO, "Started logging to 'console'.");
+
     if (OptionParser::has_flag('D', argc, argv)) {
       rpc::call_command_set_value("method.use_deprecated.set", false);
-      control->core()->push_log("Disabled deprecated commands.");
+      lt_log_print(torrent::LOG_WARN, "Disabled deprecated commands.");
     }
 
     if (OptionParser::has_flag('I', argc, argv)) {
       rpc::call_command_set_value("method.use_intermediate.set", 0);
-      control->core()->push_log("Disabled intermediate commands.");
+      lt_log_print(torrent::LOG_WARN, "Disabled intermediate commands.");
     }
 
     if (OptionParser::has_flag('K', argc, argv)) {
       rpc::call_command_set_value("method.use_intermediate.set", 2);
-      control->core()->push_log("Allowing intermediate commands without xmlrpc.");
+      lt_log_print(torrent::LOG_WARN, "Allowing intermediate commands without xmlrpc.");
     }
 
     rpc::parse_command_multiple
@@ -233,7 +250,8 @@ main(int argc, char** argv) {
        "method.insert = event.download.hash_removed,multi|rlookup|static\n"
        "method.insert = event.download.hash_queued,multi|rlookup|static\n"
 
-       "method.set_key = event.download.inserted,         1_connect_logs, d.initialize_logs=\n"
+       "method.set_key = event.download.inserted,         1_connect_logs, ((d.initialize_logs))\n"
+       "method.set_key = event.download.inserted,         1_send_scrape, ((d.tracker.send_scrape,30))\n"
        "method.set_key = event.download.inserted_new,     1_prepare, \"branch=d.state=,view.set_visible=started,view.set_visible=stopped ;d.save_full_session=\"\n"
        "method.set_key = event.download.inserted_session, 1_prepare, \"branch=d.state=,view.set_visible=started,view.set_visible=stopped\"\n"
 
@@ -242,7 +260,8 @@ main(int argc, char** argv) {
        "method.set_key = event.download.erased, !_download_list, ui.unfocus_download=\n"
        "method.set_key = event.download.erased, ~_delete_tied, d.delete_tied=\n"
 
-       "method.set_key = event.download.finished,  !_timestamp, ((d.timestamp.finished.set, ((system.time)) ))\n"
+       "method.set_key = event.download.resumed,   !_timestamp, ((d.timestamp.started.set_if_z, ((system.time)) ))\n"
+       "method.set_key = event.download.finished,  !_timestamp, ((d.timestamp.finished.set_if_z, ((system.time)) ))\n"
 
        "method.insert.c_simple = group.insert_persistent_view,"
        "((view.add,((argument.0)))),((view.persistent,((argument.0)))),((group.insert,((argument.0)),((argument.0))))\n"
@@ -352,7 +371,10 @@ main(int argc, char** argv) {
     CMD2_REDIRECT        ("min_peers_seed", "throttle.min_peers.seed.set");
     CMD2_REDIRECT        ("max_peers_seed", "throttle.max_peers.seed.set");
 
-    CMD2_REDIRECT        ("max_uploads", "throttle.max_uploads.set");
+    CMD2_REDIRECT        ("min_uploads",   "throttle.min_uploads.set");
+    CMD2_REDIRECT        ("max_uploads",   "throttle.max_uploads.set");
+    CMD2_REDIRECT        ("min_downloads", "throttle.min_downloads.set");
+    CMD2_REDIRECT        ("max_downloads", "throttle.max_downloads.set");
 
     CMD2_REDIRECT        ("max_uploads_div",      "throttle.max_uploads.div.set");
     CMD2_REDIRECT        ("max_uploads_global",   "throttle.max_uploads.global.set");
@@ -414,8 +436,6 @@ main(int argc, char** argv) {
 
       CMD2_REDIRECT        ("get_handshake_log", "log.handshake");
       CMD2_REDIRECT_GENERIC("set_handshake_log", "log.handshake.set");
-      CMD2_REDIRECT        ("get_log.tracker", "log.tracker");
-      CMD2_REDIRECT_GENERIC("set_log.tracker", "log.tracker.set");
 
       CMD2_REDIRECT        ("get_name", "session.name");
       CMD2_REDIRECT_GENERIC("set_name", "session.name.set");
@@ -824,10 +844,11 @@ main(int argc, char** argv) {
 
     int firstArg = parse_options(control, argc, argv);
 
-    if (OptionParser::has_flag('n', argc, argv))
-      control->core()->push_log("Ignoring ~/.rtorrent.rc.");
-    else
+    if (OptionParser::has_flag('n', argc, argv)) {
+      lt_log_print(torrent::LOG_WARN, "Ignoring ~/.rtorrent.rc.");
+    } else {
       rpc::parse_command_single(rpc::make_target(), "try_import = ~/.rtorrent.rc");
+    }
 
     control->initialize();
 
@@ -870,11 +891,78 @@ main(int argc, char** argv) {
     return -1;
   }
 
+  torrent::log_cleanup();
+
   delete control;
   delete worker_thread;
   delete main_thread;
 
   return 0;
+}
+
+void
+handle_sigbus(int signum, siginfo_t* sa, void* ptr) {
+  if (signum != SIGBUS)
+    do_panic(signum);
+
+  SignalHandler::set_default(signum);
+  display::Canvas::cleanup();
+
+  // Use printf here instead...
+
+  printf("Caught SIGBUS, dumping stack:\n");
+
+#ifdef USE_EXECINFO
+  void* stackPtrs[20];
+
+  // Print the stack and exit.
+  int stackSize = backtrace(stackPtrs, 20);
+  char** stackStrings = backtrace_symbols(stackPtrs, stackSize);
+
+  for (int i = 0; i < stackSize; ++i)
+    printf("%i %s\n", i, stackStrings[i]);
+
+#else
+  printf("Stack dump not enabled.\n");
+#endif
+  
+  printf("\nError: %s\n", rak::error_number(sa->si_errno).c_str());
+
+  const char* signal_reason;
+
+  switch (sa->si_code) {
+  case BUS_ADRALN: signal_reason = "Invalid address alignment."; break;
+  case BUS_ADRERR: signal_reason = "Non-existent physical address."; break;
+  case BUS_OBJERR: signal_reason = "Object specific hardware error."; break;
+  default:
+    if (sa->si_code <= 0)
+      signal_reason = "User-generated signal.";
+    else
+      signal_reason = "Unknown.";
+
+    break;
+  };
+
+  printf("Signal code '%i': %s\n", sa->si_code, signal_reason);
+  printf("Fault address: %p.\n\n", sa->si_addr);
+
+  // New code for finding the location of the SIGBUS signal, and using
+  // that to figure out how to recover.
+  torrent::chunk_info_result result = torrent::chunk_list_address_info(sa->si_addr);
+
+  if (!result.download.is_valid()) {
+    printf("The fault address is not part of any chunk.\n");
+    std::abort();
+  }
+
+  printf("Torrent name: '%s'.\n", result.download.info()->name().c_str());
+  printf("File name:    '%s'.\n", result.file_path);
+  printf("File offset:  %" PRIu64 ".\n", result.file_offset);
+  printf("Chunk index:  %u.\n", result.chunk_index);
+  printf("Chunk offset: %u.\n", result.chunk_offset);
+
+  torrent::log_cleanup();
+  std::abort();
 }
 
 void
@@ -918,6 +1006,7 @@ do_panic(int signum) {
   if (signum == SIGBUS)
     std::cout << "A bus error probably means you ran out of diskspace." << std::endl;
 
+  torrent::log_cleanup();
   std::abort();
 }
 

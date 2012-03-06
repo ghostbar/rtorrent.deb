@@ -1,5 +1,5 @@
 // rTorrent - BitTorrent client
-// Copyright (C) 2005-2007, Jari Sundell
+// Copyright (C) 2005-2011, Jari Sundell
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -57,6 +57,7 @@
 #include <torrent/object_stream.h>
 #include <torrent/tracker_list.h>
 #include <torrent/throttle.h>
+#include <torrent/utils/log.h>
 
 #include "rpc/parse_commands.h"
 #include "utils/directory.h"
@@ -75,24 +76,9 @@
 #include "poll_manager_select.h"
 #include "view.h"
 
+namespace std { using namespace tr1; }
+
 namespace core {
-
-void
-receive_tracker_dump(const std::string& url, const char* data, size_t size) {
-  const std::string& filename = rpc::call_command_string("log.tracker");
-
-  if (filename.empty())
-    return;
-
-  std::fstream fstr(filename.c_str(), std::ios::out | std::ios::app);
-
-  if (!fstr.is_open())
-    return;
-
-  fstr << "url: " << url << std::endl << "---" << std::endl;
-  fstr.write(data, size);
-  fstr << std::endl <<"---" << std::endl;
-}
 
 void
 Manager::handshake_log(const sockaddr* sa, int msg, int err, const torrent::HashString* hash) {
@@ -220,7 +206,7 @@ Manager::get_address_throttle(const sockaddr* addr) {
 // Most of this should be possible to move out.
 void
 Manager::initialize_second() {
-  torrent::Http::set_factory(sigc::mem_fun(m_httpStack, &CurlStack::new_object));
+  torrent::Http::set_factory(std::bind(&CurlStack::new_object, m_httpStack));
   m_httpQueue->slot_factory(sigc::mem_fun(m_httpStack, &CurlStack::new_object));
 
   CurlStack::global_init();
@@ -579,7 +565,7 @@ Manager::receive_hashing_changed() {
 
       } else {
         (*itr)->set_hash_failed(true);
-        push_log(e.what());
+        lt_log_print(torrent::LOG_TORRENT_ERROR, "Hashing failed: %s", e.what());
       }
     }
   }

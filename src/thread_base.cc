@@ -1,5 +1,5 @@
 // libTorrent - BitTorrent library
-// Copyright (C) 2005-2007, Jari Sundell
+// Copyright (C) 2005-2011, Jari Sundell
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -43,8 +43,10 @@
 #include <cstring>
 #include <iostream>
 #include <signal.h>
+#include <unistd.h>
 #include <rak/error_number.h>
 #include <torrent/exceptions.h>
+#include <torrent/utils/log.h>
 
 #include "globals.h"
 #include "control.h"
@@ -169,9 +171,8 @@ ThreadBase::event_loop(ThreadBase* threadBase) {
 
   } catch (torrent::shutdown_exception& e) {
     acquire_global_lock();
-    control->core()->push_log("Shutting down thread.");
+    lt_log_print(torrent::LOG_THREAD_NOTICE, "Shutting down thread.");
     release_global_lock();
-    //    sleep(20);
   }
 
   threadBase->m_state = STATE_INACTIVE;
@@ -201,10 +202,15 @@ ThreadBase::queue_item(thread_base_func newFunc) {
 
 void
 ThreadBase::interrupt_main_polling() {
-  do {
+  int sleep_length = 0;
+
+  while (ThreadBase::is_main_polling()) {
+    pthread_kill(main_thread->m_thread, SIGUSR1);
+
     if (!ThreadBase::is_main_polling())
       return;
-    
-    pthread_kill(main_thread->m_thread, SIGUSR1);
-  } while (1);
+
+    usleep(sleep_length);
+    sleep_length = std::min(sleep_length + 50, 1000);
+  }
 }

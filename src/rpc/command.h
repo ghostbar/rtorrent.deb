@@ -1,5 +1,5 @@
 // rTorrent - BitTorrent client
-// Copyright (C) 2005-2007, Jari Sundell
+// Copyright (C) 2005-2011, Jari Sundell
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -86,8 +86,8 @@ struct rt_triple : private std::pair<T1, T2> {
 
   using base_type::first;
   using base_type::second;
-  using base_type::first_type;
-  using base_type::second_type;
+  using typename base_type::first_type;
+  using typename base_type::second_type;
 
   T3 third;
 
