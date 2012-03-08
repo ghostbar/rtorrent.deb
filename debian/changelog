@@ -1,8 +1,15 @@
 rtorrent (0.9.0-1) experimental; urgency=low
 
   * New upstream release.
+    + Build-Depend on libtorrent-dev >= 0.13.0~.
+    + Drop IPv6 patch, applied upstream.
+  * Don't run dh_auto_test in debian/rules.
+    + Drop remove-tests.patch, not needed since "make check" isn't called
+      anymore.
+  * Use autoreconf as part of the build process.
+    + Build-Depend on dh-autoreconf and libcppunit-dev.
 
- -- Benoît Knecht <benoit.knecht@fsfe.org>  Thu, 08 Mar 2012 11:22:42 +0100
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Thu, 08 Mar 2012 11:43:46 +0100
 
 rtorrent (0.8.9-2) unstable; urgency=medium
 
