@@ -9,7 +9,7 @@ Uploaders:
  Rogério Brito <rbrito@ime.usp.br>
 Build-Depends:
  bc,
- debhelper (>= 7.0.50~),
+ debhelper (>= 9),
  dh-autoreconf,
  libcppunit-dev,
  libcurl4-openssl-dev,
