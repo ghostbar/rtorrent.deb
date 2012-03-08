@@ -6,6 +6,18 @@ Source: http://libtorrent.rakshasa.no/
 Files: *
 Copyright: © 2005-2011 Jari Sundell <jaris@ifi.uio.no>
 License: GPL-2+ with OpenSSL exception
+
+Files: debian/*
+Copyright: © 2005-2006 Qingning Huo <qhuo@mayhq.co.uk>
+	   © 2006-2008 Jose Luis Rivas <ghostbar38@gmail.com>
+	   © 2009-2011 Rogério Theodoro de Brito <rbrito@ime.usp.br>
+License: GPL-2+
+
+Files: fixSession080.py
+Copyright: © 2008 lostnihilist
+License: GPL-2
+
+License: GPL-2+ with OpenSSL exception
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
  the Free Software Foundation; either version 2 of the License, or
@@ -37,10 +49,6 @@ License: GPL-2+ with OpenSSL exception
  On Debian GNU/Linux systems, the complete text of the GNU General
  Public License can be found in `/usr/share/common-licenses/GPL-2'.
 
-Files: debian/*
-Copyright: © 2005-2006 Qingning Huo <qhuo@mayhq.co.uk>
-	   © 2006-2008 Jose Luis Rivas <ghostbar38@gmail.com>
-	   © 2009-2011 Rogério Theodoro de Brito <rbrito@ime.usp.br>
 License: GPL-2+
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -59,10 +67,19 @@ License: GPL-2+
  On Debian GNU/Linux systems, the complete text of the GNU General
  Public License can be found in `/usr/share/common-licenses/GPL-2'.
 
-Files: fixSession080.py
-Copyright: © 2008 lostnihilist
 License: GPL-2
- (C) 2008, Distributed under the GNU General Public License v2 by lostnihilist.
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, version 2.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this package; if not, write to the Free Software
+ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
  .
  On Debian GNU/Linux systems, the complete text of the GNU General
  Public License can be found in `/usr/share/common-licenses/GPL-2'.
