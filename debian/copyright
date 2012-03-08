@@ -13,8 +13,8 @@ Copyright: © 2005-2006 Qingning Huo <qhuo@mayhq.co.uk>
 	   © 2009-2011 Rogério Theodoro de Brito <rbrito@ime.usp.br>
 License: GPL-2+
 
-Files: fixSession080.py
-Copyright: © 2008 lostnihilist
+Files: debian/fixSession080.py
+Copyright: © 2008 lostnihilist <lostnihilist@gmail.com>
 License: GPL-2
 
 License: GPL-2+ with OpenSSL exception
