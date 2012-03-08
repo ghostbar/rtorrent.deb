@@ -2,7 +2,7 @@
 LIBS += -lpthread
 
 %:
-	dh $@ --parallel
+	dh $@ --with autoreconf --parallel
 
 override_dh_auto_configure:
 	LIBS="$(LIBS)" dh_auto_configure -- --with-xmlrpc-c --enable-ipv6
