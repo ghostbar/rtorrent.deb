@@ -4,9 +4,7 @@ LIBS += -lpthread
 %:
 	dh $@ --parallel
 
-override_dh_clean:
-	dh_clean
-	rm -fr test/Makefile
-
 override_dh_auto_configure:
 	LIBS="$(LIBS)" dh_auto_configure -- --with-xmlrpc-c --enable-ipv6
+
+override_dh_auto_test:
