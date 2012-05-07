@@ -41,6 +41,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <rak/path.h>
+#include <tr1/functional>
+#include <torrent/utils/log.h>
 #include <torrent/utils/resume.h>
 #include <torrent/object.h>
 #include <torrent/object_stream.h>
@@ -105,8 +107,8 @@ DownloadFactory::DownloadFactory(Manager* m) :
   m_printLog(true),
   m_isFile(false) {
 
-  m_taskLoad.set_slot(rak::mem_fn(this, &DownloadFactory::receive_load));
-  m_taskCommit.set_slot(rak::mem_fn(this, &DownloadFactory::receive_commit));
+  m_taskLoad.slot() = std::tr1::bind(&DownloadFactory::receive_load, this);
+  m_taskCommit.slot() = std::tr1::bind(&DownloadFactory::receive_commit, this);
 
   // m_variables["connection_leech"] = rpc::call_command_void("protocol.connection.leech");
   // m_variables["connection_seed"]  = rpc::call_command_void("protocol.connection.seed");
@@ -156,8 +158,8 @@ DownloadFactory::receive_load() {
     m_stream = new std::stringstream;
     HttpQueue::iterator itr = m_manager->http_queue()->insert(m_uri, m_stream);
 
-    (*itr)->signal_done().push_front(std::bind(&DownloadFactory::receive_loaded, this));
-    (*itr)->signal_failed().push_front(std::bind(&DownloadFactory::receive_failed, this, std::placeholders::_1));
+    (*itr)->signal_done().push_front(std::tr1::bind(&DownloadFactory::receive_loaded, this));
+    (*itr)->signal_failed().push_front(std::tr1::bind(&DownloadFactory::receive_failed, this, std::tr1::placeholders::_1));
 
     m_variables["tied_to_file"] = (int64_t)false;
 
@@ -310,6 +312,9 @@ DownloadFactory::receive_success() {
   torrent::HashString infohash = download->info()->hash();
 
   try {
+    if (torrent::log_groups[torrent::LOG_TORRENT_DEBUG].valid())
+      log_created(download, rtorrent);
+
     std::for_each(m_commands.begin(), m_commands.end(),
                   rak::bind2nd(std::ptr_fun(&rpc::parse_command_multiple_std), rpc::make_target(download)));
 
@@ -325,10 +330,8 @@ DownloadFactory::receive_success() {
   } catch (torrent::input_error& e) {
     std::string msg = "Command on torrent creation failed: " + std::string(e.what());
 
-    if (m_printLog) {
-      m_manager->get_log_important().push_front(msg);
-      m_manager->get_log_complete().push_front(msg);
-    }
+    if (m_printLog)
+      m_manager->push_log_std(msg);
     
     if (m_manager->download_list()->find(infohash) != m_manager->download_list()->end()) {
       // Should stop it, mark it bad. Perhaps even delete it?
@@ -342,12 +345,36 @@ DownloadFactory::receive_success() {
 }
 
 void
+DownloadFactory::log_created(Download* download, torrent::Object* rtorrent) {
+  std::stringstream dump;
+
+  dump << "info_hash = " << torrent::hash_string_to_hex_str(download->info()->hash()) << std::endl;
+  dump << "session = " << (m_session ? "true" : "false") << std::endl;
+
+  if (download->download()->info()->is_meta_download())
+    dump << "magnet = true" << std::endl;
+
+  if (!rtorrent->has_key_string("directory"))
+    dump << "directory = \"" << (m_variables["directory"].is_string() ? m_variables["directory"].as_string() : std::string()) << '"' << std::endl;
+  else
+    dump << "directory_base = \"" << (rtorrent->get_key("directory").is_string() ? rtorrent->get_key("directory").as_string() : std::string()) << '"' << std::endl;
+
+  dump << "---COMMANDS---" << std::endl;
+
+  for (command_list_type::const_iterator itr = m_commands.begin(); itr != m_commands.end(); itr++) {
+    dump << *itr << std::endl;
+  }
+
+  std::string dump_str = dump.str();
+
+  lt_log_print_dump(torrent::LOG_TORRENT_DEBUG, dump_str.c_str(), dump_str.size(), "Creating new download:");
+}
+
+void
 DownloadFactory::receive_failed(const std::string& msg) {
   // Add message to log.
-  if (m_printLog) {
-    m_manager->get_log_important().push_front(msg + ": \"" + m_uri + "\"");
-    m_manager->get_log_complete().push_front(msg + ": \"" + m_uri + "\"");
-  }
+  if (m_printLog)
+    m_manager->push_log_std(msg + ": \"" + m_uri + "\"");
 
   m_slotFinished();
 }

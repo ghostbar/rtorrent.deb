@@ -37,7 +37,6 @@
 #ifndef RTORRENT_CORE_DOWNLOAD_H
 #define RTORRENT_CORE_DOWNLOAD_H
 
-#include <sigc++/connection.h>
 #include <torrent/download.h>
 #include <torrent/download_info.h>
 #include <torrent/hash_string.h>
@@ -154,10 +153,6 @@ private:
   uint32_t            m_chunksFailed;
 
   uint32_t            m_resumeFlags;
-
-  sigc::connection    m_connTrackerSucceeded;
-  sigc::connection    m_connTrackerFailed;
-  sigc::connection    m_connStorageError;
 
   unsigned int        m_group;
 };

@@ -46,6 +46,7 @@
 #include <torrent/http.h>
 #include <torrent/torrent.h>
 #include <torrent/exceptions.h>
+#include <torrent/poll.h>
 #include <torrent/data/chunk_utils.h>
 #include <torrent/utils/log.h>
 #include <rak/functional.h>
@@ -76,10 +77,7 @@
 #include "signal_handler.h"
 #include "option_parser.h"
 
-#include "thread_main.h"
 #include "thread_worker.h"
-
-namespace std { using namespace tr1; }
 
 void handle_sigbus(int signum, siginfo_t* sa, void* ptr);
 void do_panic(int signum);
@@ -151,14 +149,29 @@ load_arg_torrents(Control* c, char** first, char** last) {
   }
 }
 
-static inline rak::timer
+static uint64_t
 client_next_timeout(Control* c) {
   if (taskScheduler.empty())
-    return c->is_shutdown_started() ? rak::timer::from_milliseconds(100) : rak::timer::from_seconds(60);
+    return (c->is_shutdown_started() ? rak::timer::from_milliseconds(100) : rak::timer::from_seconds(60)).usec();
   else if (taskScheduler.top()->time() <= cachedTime)
     return 0;
   else
-    return taskScheduler.top()->time() - cachedTime;
+    return (taskScheduler.top()->time() - cachedTime).usec();
+}
+
+static void
+client_perform() {
+  // Use throw exclusively.
+  if (control->is_shutdown_completed())
+    throw torrent::shutdown_exception();
+
+  if (control->is_shutdown_received())
+    control->handle_shutdown();
+
+  control->inc_tick();
+
+  cachedTime = rak::timer::current();
+  rak::priority_queue_perform(&taskScheduler, cachedTime);
 }
 
 int
@@ -170,14 +183,11 @@ main(int argc, char** argv) {
 
     cachedTime = rak::timer::current();
 
+    // Initialize logging:
+    torrent::log_initialize();
+
     control = new Control;
     
-    main_thread = new ThreadMain();
-    main_thread->init_thread();
-
-    worker_thread = new ThreadWorker();
-    worker_thread->init_thread();
-
     srandom(cachedTime.usec());
     srand48(cachedTime.usec());
 
@@ -195,18 +205,21 @@ main(int argc, char** argv) {
     // to process new non-socket events.
     SignalHandler::set_handler(SIGUSR1,  sigc::ptr_fun(&do_nothing));
 
-    torrent::initialize(main_thread->poll());
+    torrent::log_add_group_output(torrent::LOG_NOTICE, "important");
+    torrent::log_add_group_output(torrent::LOG_INFO, "complete");
+
+    torrent::Poll::slot_create_poll() = std::tr1::bind(&core::create_poll);
+
+    torrent::initialize();
+    torrent::main_thread()->slot_do_work() = tr1::bind(&client_perform);
+    torrent::main_thread()->slot_next_timeout() = tr1::bind(&client_next_timeout, control);
+
+    worker_thread = new ThreadWorker();
+    worker_thread->init_thread();
 
     // Initialize option handlers after libtorrent to ensure
     // torrent::ConnectionManager* are valid etc.
     initialize_commands();
-
-    // Initialize logging:
-    torrent::log_initialize();
-    torrent::log_open_output("console", std::bind(&core::Manager::push_log, control->core(), std::placeholders::_1));
-    torrent::log_add_group_output(torrent::LOG_INFO, "console");
-
-    lt_log_print(torrent::LOG_INFO, "Started logging to 'console'.");
 
     if (OptionParser::has_flag('D', argc, argv)) {
       rpc::call_command_set_value("method.use_deprecated.set", false);
@@ -636,18 +649,6 @@ main(int argc, char** argv) {
       CMD2_REDIRECT        ("get_session_on_completion", "session.on_completion");
       CMD2_REDIRECT_GENERIC("set_session_on_completion", "session.on_completion.set");
 
-      CMD2_REDIRECT        ("hash_read_ahead", "system.hash.read_ahead.set");
-      CMD2_REDIRECT        ("get_hash_read_ahead", "system.hash.read_ahead");
-      CMD2_REDIRECT_GENERIC("set_hash_read_ahead", "system.hash.read_ahead.set");
-
-      CMD2_REDIRECT        ("hash_interval", "system.hash.interval.set");
-      CMD2_REDIRECT        ("get_hash_interval", "system.hash.interval");
-      CMD2_REDIRECT_GENERIC("set_hash_interval", "system.hash.interval.set");
-
-      CMD2_REDIRECT        ("hash_max_tries", "system.hash.max_tries.set");
-      CMD2_REDIRECT        ("get_hash_max_tries", "system.hash.max_tries");
-      CMD2_REDIRECT_GENERIC("set_hash_max_tries", "system.hash.max_tries.set");
-
       CMD2_REDIRECT        ("check_hash", "pieces.hash.on_completion.set");
       CMD2_REDIRECT        ("get_check_hash", "pieces.hash.on_completion");
       CMD2_REDIRECT_GENERIC("set_check_hash", "pieces.hash.on_completion.set");
@@ -868,18 +869,7 @@ main(int argc, char** argv) {
 
     worker_thread->start_thread();
 
-    while (!control->is_shutdown_completed()) {
-      if (control->is_shutdown_received())
-        control->handle_shutdown();
-
-      control->inc_tick();
-
-      cachedTime = rak::timer::current();
-      rak::priority_queue_perform(&taskScheduler, cachedTime);
-
-      // Do shutdown check before poll, not after.
-      main_thread->poll_manager()->poll(client_next_timeout(control));
-    }
+    torrent::thread_base::event_loop(torrent::main_thread());
 
     control->core()->download_list()->session_save();
     control->cleanup();
@@ -895,7 +885,6 @@ main(int argc, char** argv) {
 
   delete control;
   delete worker_thread;
-  delete main_thread;
 
   return 0;
 }
