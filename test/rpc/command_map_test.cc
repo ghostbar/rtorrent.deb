@@ -3,7 +3,7 @@
 #include "command_helpers.h"
 #include "rpc/command_map.h"
 
-#import "command_map_test.h"
+#include "command_map_test.h"
 
 CPPUNIT_TEST_SUITE_REGISTRATION(CommandMapTest);
 
@@ -21,7 +21,7 @@ torrent::Object cmd_test_any_string(__UNUSED rpc::target_type target, const std:
 void
 CommandMapTest::test_basics() {
   CMD2_ANY("test_a", &cmd_test_map_a);
-  CMD2_ANY("test_b", std::bind(&cmd_test_map_b, std::placeholders::_1, std::placeholders::_2, (uint64_t)2));
+  CMD2_ANY("test_b", tr1::bind(&cmd_test_map_b, tr1::placeholders::_1, tr1::placeholders::_2, (uint64_t)2));
   CMD2_ANY_STRING("any_string", &cmd_test_any_string);
 
   CPPUNIT_ASSERT(m_map.call_command("test_a", (int64_t)1).as_value() == 1);

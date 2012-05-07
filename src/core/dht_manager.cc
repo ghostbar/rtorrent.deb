@@ -114,7 +114,7 @@ DhtManager::start_dht() {
     torrent::dht_manager()->start(port);
     torrent::dht_manager()->reset_statistics();
 
-    m_updateTimeout.set_slot(rak::mem_fn(this, &DhtManager::update));
+    m_updateTimeout.slot() = std::tr1::bind(&DhtManager::update, this);
     priority_queue_insert(&taskScheduler, &m_updateTimeout, (cachedTime + rak::timer::from_seconds(60)).round_seconds());
 
     m_dhtPrevCycle = 0;
@@ -197,7 +197,7 @@ DhtManager::update() {
         break;
       
     if (itr == end) {
-      m_stopTimeout.set_slot(rak::mem_fn(this, &DhtManager::stop_dht));
+      m_stopTimeout.slot() = std::tr1::bind(&DhtManager::stop_dht, this);
       priority_queue_insert(&taskScheduler, &m_stopTimeout, (cachedTime + rak::timer::from_seconds(15 * 60)).round_seconds());
     }
   }
@@ -248,7 +248,7 @@ DhtManager::log_statistics(bool force) {
   if (m_dhtPrevCycle == 1) {
     char buffer[128];
     snprintf(buffer, sizeof(buffer), "DHT bootstrap complete, have %d nodes in %d buckets.", stats.num_nodes, stats.num_buckets);
-    control->core()->get_log_complete().push_front(buffer);
+    control->core()->push_log_complete(buffer);
     m_dhtPrevCycle = stats.cycle;
     return false;
   };
@@ -271,7 +271,7 @@ DhtManager::log_statistics(bool force) {
              stats.max_peers,
              stats.num_trackers);
 
-    control->core()->get_log_complete().push_front(buffer);
+    control->core()->push_log_complete(buffer);
 
     m_dhtPrevCycle = stats.cycle;
     m_dhtPrevQueriesSent = stats.queries_sent;

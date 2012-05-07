@@ -77,7 +77,7 @@ Control::Control() :
 
   m_inputStdin->slot_pressed(sigc::mem_fun(m_input, &input::Manager::pressed));
 
-  m_taskShutdown.set_slot(rak::mem_fn(this, &Control::handle_shutdown));
+  m_taskShutdown.slot() = std::tr1::bind(&Control::handle_shutdown, this);
 
   m_commandScheduler->set_slot_error_message(rak::mem_fn(m_core, &core::Manager::push_log_std));
 }
@@ -114,7 +114,7 @@ Control::initialize() {
 
   m_ui->init(this);
 
-  m_inputStdin->insert(main_thread->poll());
+  m_inputStdin->insert(torrent::main_thread()->poll());
 }
 
 void
@@ -124,7 +124,7 @@ Control::cleanup() {
 
   priority_queue_erase(&taskScheduler, &m_taskShutdown);
 
-  m_inputStdin->remove(main_thread->poll());
+  m_inputStdin->remove(torrent::main_thread()->poll());
 
   m_core->download_store()->disable();
 
