@@ -1,9 +1,10 @@
 rtorrent (0.9.2-1) unstable; urgency=low
 
-  * New upstream release. Closes: #667361.
+  * New upstream release. Closes: #671891.
     + Build-Depend on libtorrent-dev >= 0.13.2~.
+    + Compilation with g++-4.7 fixed upstream. Closes: #667361.
 
- -- Benoît Knecht <benoit.knecht@fsfe.org>  Mon, 07 May 2012 19:09:12 +0200
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Wed, 09 May 2012 16:29:51 +0200
 
 rtorrent (0.9.0-1) UNRELEASED; urgency=low
 
