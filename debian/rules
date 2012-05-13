@@ -1,8 +1,7 @@
 #!/usr/bin/make -f
-LIBS += -lpthread
 
 %:
 	dh $@ --with autoreconf --parallel
 
 override_dh_auto_configure:
-	LIBS="$(LIBS)" dh_auto_configure -- --with-xmlrpc-c --enable-ipv6
+	dh_auto_configure -- --with-xmlrpc-c --enable-ipv6
