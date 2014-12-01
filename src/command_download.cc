@@ -138,9 +138,10 @@ apply_d_change_link(core::Download* download, const torrent::Object::list_type& 
 
   switch (changeType) {
   case 0:
-    // if (symlink(target.c_str(), link.c_str()) == -1)
-      //     control->core()->push_log("create_link failed: " + std::string(rak::error_number::current().c_str()));
-      //     control->core()->push_log("create_link failed: " + std::string(rak::error_number::current().c_str()) + " to " + target);
+    if (symlink(target.c_str(), link.c_str()) == -1){
+      lt_log_print(torrent::LOG_TORRENT_WARN, "create_link failed: %s",
+          rak::error_number::current().c_str());
+    }
     break;
 
   case 1:
@@ -149,8 +150,9 @@ apply_d_change_link(core::Download* download, const torrent::Object::list_type& 
     rak::error_number::clear_global();
 
     if (!fileStat.update_link(link) || !fileStat.is_link() ||
-        unlink(link.c_str()) == -1) {
-      //     control->core()->push_log("delete_link failed: " + std::string(rak::error_number::current().c_str()));
+        unlink(link.c_str()) == -1){
+      lt_log_print(torrent::LOG_TORRENT_WARN, "delete_link failed: %s",
+          rak::error_number::current().c_str());
     }
     break;
   }
@@ -280,15 +282,6 @@ retrieve_d_bitfield(core::Download* download) {
     return torrent::Object("");
 
   return torrent::Object(rak::transform_hex(bitField->begin(), bitField->end()));
-}
-
-// Just a helper function atm.
-torrent::Object
-cmd_d_initialize_logs(core::Download* download) {
-  download->info()->signal_network_log().push_back(tr1::bind(&core::Manager::push_log_complete, control->core(), tr1::placeholders::_1));
-  download->info()->signal_storage_error().push_back(tr1::bind(&core::Manager::push_log_complete, control->core(), tr1::placeholders::_1));
-
-  return torrent::Object();
 }
 
 struct call_add_d_peer_t {
@@ -869,8 +862,6 @@ initialize_command_download() {
   CMD2_DL         ("d.group",      tr1::bind(&cg_d_group, tr1::placeholders::_1));
   CMD2_DL         ("d.group.name", tr1::bind(&cg_d_group, tr1::placeholders::_1));
   CMD2_DL_V       ("d.group.set",  tr1::bind(&cg_d_group_set, tr1::placeholders::_1, tr1::placeholders::_2));
-
-  CMD2_DL         ("d.initialize_logs", tr1::bind(&cmd_d_initialize_logs, tr1::placeholders::_1));
 
   CMD2_DL_LIST    ("f.multicall", tr1::bind(&f_multicall, tr1::placeholders::_1, tr1::placeholders::_2));
   CMD2_DL_LIST    ("p.multicall", tr1::bind(&p_multicall, tr1::placeholders::_1, tr1::placeholders::_2));

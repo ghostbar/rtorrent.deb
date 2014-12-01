@@ -37,6 +37,7 @@
 #include "config.h"
 
 #include <algorithm>
+#include <torrent/utils/log.h>
 
 #include "globals.h"
 #include "control.h"
@@ -401,7 +402,7 @@ system_method_set_key(const torrent::Object::list_type& args) {
     return torrent::Object();
   }
 
-  if (itrArgs->is_dict_key())
+  if (itrArgs->is_dict_key() || itrArgs->is_list())
     control->object_storage()->set_str_multi_key_obj(key.c_str(), cmd_key, *itrArgs);
   else
     control->object_storage()->set_str_multi_key(key, cmd_key, system_method_generate_command(itrArgs, args.end()));
@@ -420,6 +421,16 @@ system_method_list_keys(const torrent::Object::string_type& args) {
     result.push_back(itr->first);
 
   return rawResult;
+}
+
+torrent::Object
+cmd_catch(rpc::target_type target, const torrent::Object& args) {
+  try {
+    return rpc::call_object(args, target);
+  } catch (torrent::input_error& e) {
+    lt_log_print(torrent::LOG_WARN, "Caught exception: '%s'.", e.what());
+    return torrent::Object();
+  }
 }
 
 #define CMD2_METHOD_INSERT(key, flags) \
@@ -455,4 +466,6 @@ initialize_command_dynamic() {
 
   CMD2_ANY_STRING  ("method.rlookup",       tr1::bind(&rpc::object_storage::rlookup_obj_list, control->object_storage(), tr1::placeholders::_2));
   CMD2_ANY_STRING_V("method.rlookup.clear", tr1::bind(&rpc::object_storage::rlookup_clear, control->object_storage(), tr1::placeholders::_2));
+
+  CMD2_ANY         ("catch", tr1::bind(&cmd_catch, tr1::placeholders::_1, tr1::placeholders::_2));
 }

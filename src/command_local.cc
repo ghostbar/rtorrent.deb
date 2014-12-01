@@ -49,7 +49,6 @@
 #include <torrent/data/file_manager.h>
 #include <torrent/data/chunk_utils.h>
 #include <torrent/utils/log.h>
-#include <torrent/utils/log_files.h>
 #include <torrent/utils/option_strings.h>
 
 #include "core/download.h"
@@ -112,27 +111,6 @@ apply_log(const torrent::Object::string_type& arg, int logType) {
   } else {
     control->core()->push_log("Closed log file.");
   }
-
-  return torrent::Object();
-}
-
-torrent::Object
-apply_log_libtorrent(const torrent::Object::list_type& args) {
-  if (args.empty() || args.size() > 2)
-    throw torrent::input_error("Invalid argument count.");
-  
-  torrent::log_file* log_file = torrent::find_log_file(args.front().as_string().c_str());
-
-  if (log_file == NULL)
-    throw torrent::input_error("Invalid log name.");
-
-  if (args.size() == 1) {
-    log_file->close();
-    return torrent::Object();
-  }
-  
-  if (!log_file->open_file(args.back().as_string().c_str()))
-    throw torrent::input_error("Could not open log file.");
 
   return torrent::Object();
 }
@@ -263,10 +241,10 @@ file_print_list(torrent::Object::list_const_iterator first, torrent::Object::lis
   while (first != last) {
     switch (first->type()) {
     case torrent::Object::TYPE_STRING:
-      fprintf(output, " %s" + !(flags & file_print_use_space), first->as_string().c_str());
+      fprintf(output, (const char*)" %s" + !(flags & file_print_use_space), first->as_string().c_str());
       break;
     case torrent::Object::TYPE_VALUE:
-      fprintf(output, " %lli" + !(flags & file_print_use_space), first->as_value());
+      fprintf(output, (const char*)" %lli" + !(flags & file_print_use_space), first->as_value());
       break;
     case torrent::Object::TYPE_LIST:
       file_print_list(first->as_list().begin(), first->as_list().end(), output, 0);
@@ -306,6 +284,16 @@ apply_log_open_file(const torrent::Object::list_type& args) {
   
   torrent::log_open_file_output(args.front().as_string().c_str(),
                                 rak::path_expand(args.back().as_string()).c_str());
+  return torrent::Object();
+}
+
+torrent::Object
+apply_log_open_gz_file(const torrent::Object::list_type& args) {
+  if (args.size() != 2)
+    throw torrent::input_error("Invalid number of arguments.");
+  
+  torrent::log_open_gz_file_output(args.front().as_string().c_str(),
+                                   rak::path_expand(args.back().as_string()).c_str());
   return torrent::Object();
 }
 
@@ -413,13 +401,13 @@ initialize_command_local() {
   CMD2_EXECUTE     ("execute.capture",         rpc::ExecFile::flag_throw | rpc::ExecFile::flag_expand_tilde | rpc::ExecFile::flag_capture);
   CMD2_EXECUTE     ("execute.capture_nothrow", rpc::ExecFile::flag_expand_tilde | rpc::ExecFile::flag_capture);
 
-  CMD2_ANY_LIST    ("log.open_file",  tr1::bind(&apply_log_open_file, tr1::placeholders::_2));
-  CMD2_ANY_LIST    ("log.add_output", tr1::bind(&apply_log_add_output, tr1::placeholders::_2));
+  CMD2_ANY_LIST    ("log.open_file",    tr1::bind(&apply_log_open_file, tr1::placeholders::_2));
+  CMD2_ANY_LIST    ("log.open_gz_file", tr1::bind(&apply_log_open_gz_file, tr1::placeholders::_2));
+  CMD2_ANY_LIST    ("log.add_output",   tr1::bind(&apply_log_add_output, tr1::placeholders::_2));
 
   CMD2_ANY_STRING  ("log.execute",    tr1::bind(&apply_log, tr1::placeholders::_2, 0));
   CMD2_ANY_STRING  ("log.vmmap.dump", tr1::bind(&log_vmmap_dump, tr1::placeholders::_2));
   CMD2_ANY_STRING_V("log.xmlrpc",     tr1::bind(&ThreadWorker::set_xmlrpc_log, worker_thread, tr1::placeholders::_2));
-  CMD2_ANY_LIST    ("log.libtorrent", tr1::bind(&apply_log_libtorrent, tr1::placeholders::_2));
 
   CMD2_ANY_LIST    ("file.append",    tr1::bind(&cmd_file_append, tr1::placeholders::_2));
 

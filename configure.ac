@@ -1,9 +1,9 @@
-AC_INIT(rtorrent, 0.9.2, jaris@ifi.uio.no)
+AC_INIT(rtorrent, 0.9.4, sundell.software@gmail.com)
 
-AC_DEFINE(API_VERSION, 6, api version)
+AC_DEFINE(API_VERSION, 8, api version)
 
 AM_INIT_AUTOMAKE
-AM_CONFIG_HEADER(config.h)
+AC_CONFIG_HEADERS(config.h)
 AM_PATH_CPPUNIT(1.9.6)
 
 AC_PROG_CXX
@@ -41,15 +41,11 @@ CFLAGS="$CFLAGS $PTHREAD_CFLAGS $CURSES_CFLAGS"
 CXXFLAGS="$CXXFLAGS $PTHREAD_CFLAGS $CURSES_CFLAGS"
 LIBS="$PTHREAD_LIBS $CURSES_LIB $LIBS"
 
-PKG_CHECK_MODULES(sigc, sigc++-2.0,
-	          CXXFLAGS="$CXXFLAGS $sigc_CFLAGS";
-		  LIBS="$LIBS $sigc_LIBS")
-
-PKG_CHECK_MODULES(libcurl, libcurl >= 7.15.4,
+PKG_CHECK_MODULES([libcurl], libcurl >= 7.15.4,
 	          CXXFLAGS="$CXXFLAGS $libcurl_CFLAGS";
 		  LIBS="$LIBS $libcurl_LIBS")
 
-PKG_CHECK_MODULES(libtorrent, libtorrent >= 0.13.2,
+PKG_CHECK_MODULES([libtorrent], libtorrent >= 0.13.4,
 	          CXXFLAGS="$CXXFLAGS $libtorrent_CFLAGS";
 		  LIBS="$LIBS $libtorrent_LIBS")
 
