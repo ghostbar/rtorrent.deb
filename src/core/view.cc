@@ -40,7 +40,6 @@
 #include <functional>
 #include <rak/functional.h>
 #include <rak/functional_fun.h>
-#include <sigc++/adaptors/bind.h>
 #include <torrent/download.h>
 #include <torrent/exceptions.h>
 
@@ -139,10 +138,16 @@ struct view_downloads_filter : std::unary_function<Download*, bool> {
   const torrent::Object&       m_command;
 };
 
-inline void
+void
 View::emit_changed() {
   priority_queue_erase(&taskScheduler, &m_delayChanged);
   priority_queue_insert(&taskScheduler, &m_delayChanged, cachedTime);
+}
+
+void
+View::emit_changed_now() {
+  for (signal_void::iterator itr = m_signal_changed.begin(), last = m_signal_changed.end(); itr != last; itr++)
+    (*itr)();
 }
 
 View::~View() {
@@ -172,7 +177,7 @@ View::initialize(const std::string& name) {
   m_focus = 0;
 
   set_last_changed(rak::timer());
-  m_delayChanged.slot() = std::tr1::bind(&signal_type::operator(), &m_signalChanged);
+  m_delayChanged.slot() = std::tr1::bind(&View::emit_changed_now, this);
 }
 
 void
@@ -184,7 +189,7 @@ View::erase(Download* download) {
 
   } else {
     erase_internal(itr);
-    rpc::parse_command_multiple_d_nothrow(download, m_eventRemoved);
+    rpc::call_object_nothrow(m_event_removed, rpc::make_target(download));
   }
 }
 
@@ -200,7 +205,7 @@ View::set_visible(Download* download) {
   base_type::erase(itr);
   insert_visible(download);
 
-  rpc::parse_command_multiple_d_nothrow(download, m_eventAdded);
+  rpc::call_object_nothrow(m_event_added, rpc::make_target(download));
 }
 
 void
@@ -218,7 +223,7 @@ View::set_not_visible(Download* download) {
   base_type::erase(itr);
   base_type::push_back(download);
 
-  rpc::parse_command_multiple_d_nothrow(download, m_eventRemoved);
+  rpc::call_object_nothrow(m_event_removed, rpc::make_target(download));
 }
 
 void
@@ -275,11 +280,13 @@ View::filter() {
   // done by using a base_type* member variable, and making sure we
   // set the elements to NULL as we trigger commands on them. Or
   // perhaps always clear them, thus not throwing anything.
-  if (!m_eventRemoved.empty())
-    std::for_each(changed.begin(), splitChanged, rak::bind2nd(std::ptr_fun(&rpc::parse_command_multiple_d_nothrow), m_eventRemoved));
+  if (!m_event_removed.is_empty())
+    std::for_each(changed.begin(), splitChanged,
+                  tr1::bind(&rpc::call_object_d_nothrow, m_event_removed, tr1::placeholders::_1));
 
-  if (!m_eventAdded.empty())
-    std::for_each(splitChanged, changed.end(),   rak::bind2nd(std::ptr_fun(&rpc::parse_command_multiple_d_nothrow), m_eventAdded));
+  if (!m_event_added.is_empty())
+    std::for_each(changed.begin(), splitChanged,
+                  tr1::bind(&rpc::call_object_d_nothrow, m_event_added, tr1::placeholders::_1));
 
   emit_changed();
 }
@@ -297,7 +304,7 @@ View::filter_download(core::Download* download) {
       erase_internal(itr);
       insert_visible(download);
 
-      rpc::parse_command_multiple_d_nothrow(download, m_eventAdded);
+      rpc::call_object_nothrow(m_event_added, rpc::make_target(download));
 
     } else {
       // This makes sure the download is sorted even if it is
@@ -315,7 +322,7 @@ View::filter_download(core::Download* download) {
     erase_internal(itr);
     base_type::push_back(download);
 
-    rpc::parse_command_multiple_d_nothrow(download, m_eventRemoved);
+    rpc::call_object_nothrow(m_event_removed, rpc::make_target(download));
   }
 
   emit_changed();
