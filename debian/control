@@ -2,7 +2,6 @@ Source: rtorrent
 Section: net
 Priority: extra
 Maintainer: Jose Luis Rivas <ghostbar@debian.org>
-DM-Upload-Allowed: yes
 Uploaders:
  Dmitry E. Oboukhov <unera@debian.org>,
  Rogério Brito <rbrito@ime.usp.br>,
