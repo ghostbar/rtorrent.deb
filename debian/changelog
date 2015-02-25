@@ -2,6 +2,7 @@ rtorrent (0.9.4-1) UNRELEASED; urgency=low
 
   * New upstream release. Closes: #754567.
   * Remove obsolete DM-Upload-Allowed from debian/control
+  * Add myself to Uploaders.
 
  -- Jonathan McDowell <noodles@earth.li>  Wed, 25 Feb 2015 20:46:24 +0000
 
