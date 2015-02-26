@@ -18,7 +18,7 @@ Build-Depends:
  libsigc++-2.0-dev,
  libtorrent-dev (>= 0.13.2~),
  libxmlrpc-core-c3-dev
-Standards-Version: 3.9.3
+Standards-Version: 3.9.6
 Vcs-Git: git://git.debian.org/git/collab-maint/rtorrent.git
 Vcs-Browser: http://git.debian.org/?p=collab-maint/rtorrent.git
 Homepage: http://libtorrent.rakshasa.no/
