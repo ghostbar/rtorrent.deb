@@ -1,6 +1,7 @@
 rtorrent (0.9.4-1) UNRELEASED; urgency=low
 
   * New upstream release. Closes: #754567.
+    + Build-Depend on libtorrent-dev >= 0.13.4~.
   * Bump Standards-Version to 3.9.6.
     + Remove obsolete DM-Upload-Allowed from debian/control
   * Add myself to Uploaders.
