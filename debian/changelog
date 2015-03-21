@@ -1,4 +1,4 @@
-rtorrent (0.9.4-1) UNRELEASED; urgency=low
+rtorrent (0.9.4-1) experimental; urgency=low
 
   * New upstream release. Closes: #754567.
     + Build-Depend on libtorrent-dev >= 0.13.4~.
@@ -6,7 +6,7 @@ rtorrent (0.9.4-1) UNRELEASED; urgency=low
     + Remove obsolete DM-Upload-Allowed from debian/control
   * Add myself to Uploaders.
 
- -- Jonathan McDowell <noodles@earth.li>  Wed, 25 Feb 2015 20:46:24 +0000
+ -- Jonathan McDowell <noodles@earth.li>  Sat, 21 Mar 2015 15:04:10 +0000
 
 rtorrent (0.9.2-1) unstable; urgency=low
 
