@@ -1,6 +1,7 @@
 rtorrent (0.9.4-2) UNRELEASED; urgency=low
 
   * Remove Benoît Knecht from Uploaders. Closes: #779431.
+  * Update upstream website. Closes: #789465.
 
  -- Jonathan McDowell <noodles@earth.li>  Sun, 21 Jun 2015 21:29:36 +0100
 
