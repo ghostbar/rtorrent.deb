@@ -1,4 +1,4 @@
-rtorrent (0.9.6-1) UNRELEASED; urgency=low
+rtorrent (0.9.6-1) unstable; urgency=medium
 
   [ Jonathan McDowell ]
   * Remove Benoît Knecht from Uploaders. Closes: #779431.
@@ -7,7 +7,7 @@ rtorrent (0.9.6-1) UNRELEASED; urgency=low
   [ Jose Luis Rivas ]
   * debian/watch: using github
 
- -- Jose Luis Rivas <ghostbar@debian.org>  Wed, 09 Sep 2015 10:30:27 -0500
+ -- Jose Luis Rivas <ghostbar@debian.org>  Sat, 03 Oct 2015 00:40:22 -0400
 
 rtorrent (0.9.4-1) experimental; urgency=low
 
